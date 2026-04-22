@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Calculate EV charging time and cost. Select your vehicle and charger type for accurate estimates.">
+    <title>EVFinder — Charging Calculator</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html" class="navbar-brand">
+            <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#1D9E75"/><path d="M18 6L10 18h5l-1 8 8-12h-5l1-8z" fill="white" stroke="white" stroke-width="0.5" stroke-linejoin="round"/></svg>
+            EVFinder
+        </a>
+        <button class="mobile-menu-btn" onclick="document.querySelector('.navbar-links').classList.toggle('open')">☰</button>
+        <ul class="navbar-links">
+            <li><a href="index.html">🗺️ Map</a></li>
+            <li><a href="calculator.html" class="active">🔋 Calculator</a></li>
+            <li><a href="profile.html">👤 Profile</a></li>
+        </ul>
+    </nav>
+
+    <div class="page-container">
+        <h1 class="page-title">🔋 Charging Calculator</h1>
+        <p class="page-subtitle">Calculate charging time and cost for your electric vehicle</p>
+
+        <div class="calculator-card">
+            <div class="form-group">
+                <label class="form-label">Select Vehicle</label>
+                <select id="calcVehicle" class="form-control"></select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Select Charger Speed</label>
+                <select id="calcCharger" class="form-control"></select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">
+                    Current Battery %
+                    <span id="calcCurrentVal" class="range-value">20%</span>
+                </label>
+                <input type="range" id="calcCurrentBattery" min="0" max="100" value="20">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">
+                    Target Battery %
+                    <span id="calcTargetVal" class="range-value">80%</span>
+                </label>
+                <input type="range" id="calcTargetBattery" min="0" max="100" value="80">
+            </div>
+
+            <div id="calcResult">
+                <p style="color:var(--text-muted);text-align:center;padding:20px;">Select vehicle and charger to see results</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/calculator.js"></script>
+</body>
+</html>

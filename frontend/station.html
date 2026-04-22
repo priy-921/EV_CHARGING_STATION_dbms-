@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="View charging station details, available chargers, estimated charging time, reviews, and peak hours.">
+    <title>EVFinder — Station Details</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html" class="navbar-brand">
+            <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#1D9E75"/><path d="M18 6L10 18h5l-1 8 8-12h-5l1-8z" fill="white" stroke="white" stroke-width="0.5" stroke-linejoin="round"/></svg>
+            EVFinder
+        </a>
+        <button class="mobile-menu-btn" onclick="document.querySelector('.navbar-links').classList.toggle('open')">☰</button>
+        <ul class="navbar-links">
+            <li><a href="index.html">🗺️ Map</a></li>
+            <li><a href="calculator.html">🔋 Calculator</a></li>
+            <li><a href="profile.html">👤 Profile</a></li>
+        </ul>
+    </nav>
+
+    <div class="page-container">
+        <!-- Station Header -->
+        <div id="stationHeader"><div class="spinner"></div></div>
+
+        <!-- ML Prediction -->
+        <div class="section">
+            <h2 class="section-title">🤖 AI Wait Time Prediction</h2>
+            <div id="predictionBox"><div class="spinner"></div></div>
+        </div>
+
+        <!-- Charging Points Grid -->
+        <div class="section">
+            <h2 class="section-title">⚡ Charging Points</h2>
+            <div id="cpGrid" class="cp-grid"><div class="spinner"></div></div>
+        </div>
+
+        <!-- Charging Calculator -->
+        <div class="section">
+            <h2 class="section-title">🔋 Charging Time Calculator</h2>
+            <div class="card">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                    <div class="form-group">
+                        <label class="form-label">Vehicle</label>
+                        <select id="vehicleSelect" class="form-control"></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Charging Point</label>
+                        <select id="cpSelect" class="form-control"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Current Battery %  <span id="batteryValue" class="range-value">20%</span></label>
+                    <input type="range" id="batterySlider" min="0" max="100" value="20" oninput="updateBatteryValue(this.value)">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Target Battery %  <span id="targetValue" class="range-value">80%</span></label>
+                    <input type="range" id="targetSlider" min="0" max="100" value="80" oninput="updateTargetValue(this.value)">
+                </div>
+                <button class="btn btn-primary btn-lg" onclick="calculateEstimate()" style="width:100%;">⚡ Calculate Estimate</button>
+                <div id="estimateResult"></div>
+            </div>
+        </div>
+
+        <!-- Peak Hours Chart -->
+        <div class="section">
+            <h2 class="section-title">📊 Peak Hours</h2>
+            <div class="card" style="padding:24px;">
+                <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">🔴 Red = Peak Hours (8-10 AM, 6-9 PM) &nbsp; 🟢 Green = Off-Peak</p>
+                <div style="height:300px;">
+                    <canvas id="peakChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reviews -->
+        <div class="section">
+            <h2 class="section-title">⭐ Reviews</h2>
+            <div id="reviewsList"><div class="spinner"></div></div>
+
+            <!-- Submit Review -->
+            <div class="card" style="margin-top:24px;">
+                <h3 class="card-header">Write a Review</h3>
+                <div class="form-group">
+                    <label class="form-label">Your User ID</label>
+                    <select id="reviewUserId" class="form-control">
+                        <option value="">Select User</option>
+                        <option value="1">Aarav Sharma</option>
+                        <option value="2">Priya Patil</option>
+                        <option value="3">Rohan Deshmukh</option>
+                        <option value="4">Sneha Kulkarni</option>
+                        <option value="5">Vikram Jadhav</option>
+                        <option value="6">Anjali More</option>
+                        <option value="7">Rahul Gaikwad</option>
+                        <option value="8">Meera Joshi</option>
+                        <option value="9">Arjun Bhosale</option>
+                        <option value="10">Kavya Pawar</option>
+                        <option value="11">Siddharth Wagh</option>
+                        <option value="12">Diya Chavan</option>
+                        <option value="13">Aditya Shinde</option>
+                        <option value="14">Pooja Mane</option>
+                        <option value="15">Kunal Deshpande</option>
+                        <option value="16">Isha Sawant</option>
+                        <option value="17">Om Thakur</option>
+                        <option value="18">Tanvi Rajput</option>
+                        <option value="19">Yash Nikam</option>
+                        <option value="20">Nisha Kale</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Rating</label>
+                    <div class="star-input">
+                        <span id="star1" onclick="setRating(1)">★</span>
+                        <span id="star2" onclick="setRating(2)">★</span>
+                        <span id="star3" onclick="setRating(3)">★</span>
+                        <span id="star4" onclick="setRating(4)">★</span>
+                        <span id="star5" onclick="setRating(5)">★</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Your Review</label>
+                    <textarea id="reviewText" class="form-control" placeholder="Share your charging experience..."></textarea>
+                </div>
+                <button class="btn btn-primary" onclick="submitReview()">Submit Review</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/station.js"></script>
+</body>
+</html>
