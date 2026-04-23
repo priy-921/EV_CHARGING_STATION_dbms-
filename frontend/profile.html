@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="View your EV charging profile, session history, and environmental impact stats.">
-    <title>EVFinder — My Profile</title>
+    <title>EVFinder - My Profile</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -23,45 +23,60 @@
 
     <div class="page-container">
         <h1 class="page-title">👤 My Profile</h1>
-        <p class="page-subtitle">Track your charging sessions and environmental impact</p>
+        <p class="page-subtitle">Track your charging sessions, saved EVs, and environmental impact</p>
 
-        <!-- User & Vehicle Selector -->
-        <div class="user-selector">
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:200px;">
-                <label class="form-label">Select User</label>
-                <select id="profileUser" class="form-control" onchange="onUserChange()">
-                    <option value="">Select User</option>
-                    <option value="1">Aarav Sharma</option>
-                    <option value="2">Priya Patil</option>
-                    <option value="3">Rohan Deshmukh</option>
-                    <option value="4">Sneha Kulkarni</option>
-                    <option value="5">Vikram Jadhav</option>
-                    <option value="6">Anjali More</option>
-                    <option value="7">Rahul Gaikwad</option>
-                    <option value="8">Meera Joshi</option>
-                    <option value="9">Arjun Bhosale</option>
-                    <option value="10">Kavya Pawar</option>
-                    <option value="11">Siddharth Wagh</option>
-                    <option value="12">Diya Chavan</option>
-                    <option value="13">Aditya Shinde</option>
-                    <option value="14">Pooja Mane</option>
-                    <option value="15">Kunal Deshpande</option>
-                    <option value="16">Isha Sawant</option>
-                    <option value="17">Om Thakur</option>
-                    <option value="18">Tanvi Rajput</option>
-                    <option value="19">Yash Nikam</option>
-                    <option value="20">Nisha Kale</option>
-                </select>
+        <div class="profile-layout">
+            <div class="card profile-card">
+                <h2 class="card-header">Account Details</h2>
+                <div id="profileDetails" class="profile-field-grid">
+                    <p style="color:var(--text-muted);">Loading your profile...</p>
+                </div>
             </div>
-            <div class="form-group" style="margin-bottom:0;flex:1;min-width:200px;">
-                <label class="form-label">Your Vehicle</label>
-                <select id="profileVehicle" class="form-control">
-                    <option value="">Loading vehicles...</option>
-                </select>
+
+            <div class="card profile-card">
+                <h2 class="card-header">My Vehicles</h2>
+                <div id="vehicleList">
+                    <p style="color:var(--text-muted);">Loading vehicles...</p>
+                </div>
             </div>
         </div>
 
-        <!-- Stats Cards -->
+        <div class="section">
+            <h2 class="section-title">➕ Add Vehicle</h2>
+            <form id="vehicleForm" class="profile-vehicle-form" onsubmit="handleAddVehicle(event)">
+                <div class="form-group">
+                    <label class="form-label">Brand</label>
+                    <input id="vehicleBrand" class="form-control" placeholder="Tata" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Model</label>
+                    <input id="vehicleModel" class="form-control" placeholder="Nexon EV" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Segment</label>
+                    <select id="vehicleSegment" class="form-control" required>
+                        <option value="">Select segment</option>
+                        <option value="2W">2W</option>
+                        <option value="3W">3W</option>
+                        <option value="4W">4W</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Battery Capacity (kWh)</label>
+                    <input id="vehicleBattery" type="number" min="0.1" step="0.01" class="form-control" placeholder="40.5" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Max AC kW</label>
+                    <input id="vehicleAc" type="number" min="0.1" step="0.01" class="form-control" placeholder="7.2" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Max DC kW</label>
+                    <input id="vehicleDc" type="number" min="0.1" step="0.01" class="form-control" placeholder="Optional">
+                </div>
+                <button class="btn btn-primary" type="submit">Add Vehicle</button>
+            </form>
+        </div>
+
         <div id="statsCards" class="stats-grid">
             <div class="stat-card">
                 <div class="stat-icon">⚡</div>
@@ -85,50 +100,123 @@
             </div>
         </div>
 
-        <!-- Session History -->
         <div class="section">
             <h2 class="section-title">📋 Charging Session History</h2>
             <div id="sessionTable">
-                <p style="color:var(--text-muted);text-align:center;padding:40px;">Select a user to view session history</p>
+                <p style="color:var(--text-muted);text-align:center;padding:40px;">Loading session history...</p>
             </div>
         </div>
     </div>
 
     <script src="js/api.js"></script>
     <script>
-        let allVehicles = [];
+        let currentUser = null;
+        let profileVehicles = [];
 
         document.addEventListener('DOMContentLoaded', async () => {
-            try {
-                allVehicles = await api.getVehicles();
-                const select = document.getElementById('profileVehicle');
-                select.innerHTML = '<option value="">Select Vehicle</option>';
-                allVehicles.forEach(v => {
-                    select.innerHTML += `<option value="${v.vehicle_id}">${v.brand} ${v.model} (${v.battery_capacity} kWh, ${v.segment})</option>`;
-                });
-            } catch (e) {
-                console.error(e);
-            }
+            currentUser = requireAuth();
+            if (!currentUser) return;
+
+            enhanceNavbar('profile');
+            await loadProfile();
         });
 
-        async function onUserChange() {
-            const userId = document.getElementById('profileUser').value;
-            if (!userId) return;
+        async function loadProfile() {
+            try {
+                const profile = await api.getUserProfile(currentUser.user_id);
+                if (profile.error) {
+                    showToast(profile.error, 'error');
+                    return;
+                }
 
-            // Auto-select vehicle if user has one (user_id 1-10 map to vehicle_id 1-10)
-            const userVehicle = allVehicles.find(v => v.user_id == userId);
-            if (userVehicle) {
-                document.getElementById('profileVehicle').value = userVehicle.vehicle_id;
+                currentUser = profile.user;
+                setCurrentUser(profile.user);
+                profileVehicles = profile.vehicles || [];
+
+                renderProfileDetails(profile.user);
+                renderVehicles(profileVehicles);
+
+                const sessions = await api.getUserSessions(profile.user.user_id);
+                renderStats(sessions || []);
+                renderSessionTable(sessions || []);
+            } catch (error) {
+                console.error(error);
+                showToast('Failed to load your profile', 'error');
             }
+        }
+
+        async function handleAddVehicle(event) {
+            event.preventDefault();
+
+            const payload = {
+                user_id: currentUser.user_id,
+                brand: document.getElementById('vehicleBrand').value.trim(),
+                model: document.getElementById('vehicleModel').value.trim(),
+                segment: document.getElementById('vehicleSegment').value,
+                battery_capacity: document.getElementById('vehicleBattery').value,
+                max_ac_kw: document.getElementById('vehicleAc').value,
+                max_dc_kw: document.getElementById('vehicleDc').value
+            };
 
             try {
-                const sessions = await api.getUserSessions(userId);
-                renderStats(sessions);
-                renderSessionTable(sessions);
-            } catch (e) {
-                console.error(e);
-                showToast('Failed to load sessions', 'error');
+                const result = await api.createVehicle(payload);
+                if (result.error) {
+                    showToast(result.error, 'error');
+                    return;
+                }
+
+                document.getElementById('vehicleForm').reset();
+                showToast(result.message, 'success');
+                await loadProfile();
+            } catch (error) {
+                console.error(error);
+                showToast('Failed to add vehicle', 'error');
             }
+        }
+
+        function renderProfileDetails(user) {
+            document.getElementById('profileDetails').innerHTML = `
+                <div class="profile-field">
+                    <span class="profile-label">User ID</span>
+                    <strong>${user.user_id}</strong>
+                </div>
+                <div class="profile-field">
+                    <span class="profile-label">Name</span>
+                    <strong>${user.first_name} ${user.last_name}</strong>
+                </div>
+                <div class="profile-field">
+                    <span class="profile-label">Email</span>
+                    <strong>${user.email}</strong>
+                </div>
+                <div class="profile-field">
+                    <span class="profile-label">Phone</span>
+                    <strong>${user.phone}</strong>
+                </div>
+            `;
+        }
+
+        function renderVehicles(vehicles) {
+            const container = document.getElementById('vehicleList');
+
+            if (!vehicles.length) {
+                container.innerHTML = '<p style="color:var(--text-muted);">No vehicle saved yet. Add your first EV below to make it your default vehicle.</p>';
+                return;
+            }
+
+            container.innerHTML = vehicles.map((vehicle, index) => `
+                <div class="vehicle-tile">
+                    <div>
+                        <span class="badge ${index === 0 ? 'badge-available' : 'badge-reserved'}">${index === 0 ? 'Default' : 'Added'}</span>
+                        <h3>${vehicle.brand} ${vehicle.model}</h3>
+                        <p>${vehicle.segment || '-'} segment</p>
+                    </div>
+                    <div class="vehicle-metrics">
+                        <span>${vehicle.battery_capacity ?? '-'} kWh</span>
+                        <span>AC ${vehicle.max_ac_kw ?? '-'} kW</span>
+                        <span>${vehicle.max_dc_kw ? `DC ${vehicle.max_dc_kw} kW` : 'DC not supported'}</span>
+                    </div>
+                </div>
+            `).join('');
         }
 
         function renderStats(sessions) {
@@ -153,7 +241,7 @@
             const container = document.getElementById('sessionTable');
 
             if (!sessions.length) {
-                container.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:40px;">No charging sessions found for this user.</p>';
+                container.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:40px;">No charging sessions found for your account.</p>';
                 return;
             }
 

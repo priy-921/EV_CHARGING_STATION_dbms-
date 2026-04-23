@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="View charging station details, available chargers, estimated charging time, reviews, and peak hours.">
     <title>EVFinder — Station Details</title>
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=8">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -84,32 +84,7 @@
             <!-- Submit Review -->
             <div class="card" style="margin-top:24px;">
                 <h3 class="card-header">Write a Review</h3>
-                <div class="form-group">
-                    <label class="form-label">Your User ID</label>
-                    <select id="reviewUserId" class="form-control">
-                        <option value="">Select User</option>
-                        <option value="1">Aarav Sharma</option>
-                        <option value="2">Priya Patil</option>
-                        <option value="3">Rohan Deshmukh</option>
-                        <option value="4">Sneha Kulkarni</option>
-                        <option value="5">Vikram Jadhav</option>
-                        <option value="6">Anjali More</option>
-                        <option value="7">Rahul Gaikwad</option>
-                        <option value="8">Meera Joshi</option>
-                        <option value="9">Arjun Bhosale</option>
-                        <option value="10">Kavya Pawar</option>
-                        <option value="11">Siddharth Wagh</option>
-                        <option value="12">Diya Chavan</option>
-                        <option value="13">Aditya Shinde</option>
-                        <option value="14">Pooja Mane</option>
-                        <option value="15">Kunal Deshpande</option>
-                        <option value="16">Isha Sawant</option>
-                        <option value="17">Om Thakur</option>
-                        <option value="18">Tanvi Rajput</option>
-                        <option value="19">Yash Nikam</option>
-                        <option value="20">Nisha Kale</option>
-                    </select>
-                </div>
+                <p id="reviewCurrentUser" class="review-current-user">Posting as current user</p>
                 <div class="form-group">
                     <label class="form-label">Rating</label>
                     <div class="star-input">
@@ -129,7 +104,13 @@
         </div>
     </div>
 
-    <script src="js/api.js"></script>
-    <script src="js/station.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const staleUserSelect = document.getElementById('reviewUserId');
+            if (staleUserSelect) staleUserSelect.closest('.form-group')?.remove();
+        });
+    </script>
+    <script src="js/api.js?v=10"></script>
+    <script src="js/station.js?v=10"></script>
 </body>
 </html>

@@ -4,6 +4,23 @@ from datetime import datetime
 
 sessions_bp = Blueprint('sessions', __name__)
 
+
+def get_status_id(cur, status_name, fallback_id):
+    cur.execute("""
+        SELECT status_id
+        FROM ChargingPointStatus
+        WHERE LOWER(status_name) = LOWER(%s)
+        LIMIT 1
+    """, (status_name,))
+    status = cur.fetchone()
+    return status['status_id'] if status else fallback_id
+
+
+def get_next_session_id(cur):
+    cur.execute("SELECT COALESCE(MAX(session_id), 0) + 1 AS next_session_id FROM ChargingSession")
+    return cur.fetchone()['next_session_id']
+
+
 @sessions_bp.route('/api/estimate', methods=['POST'])
 def estimate_charge():
     data = request.get_json()
@@ -66,23 +83,75 @@ def estimate_charge():
 
 @sessions_bp.route('/api/session/start', methods=['POST'])
 def start_session():
-    data = request.get_json()
+    data = request.get_json() or {}
     user_id = data.get('user_id')
     charging_point_id = data.get('charging_point_id')
+    session_id = data.get('session_id')
+
+    if user_id in (None, '') or charging_point_id in (None, ''):
+        return jsonify({'error': 'User and charging point are required'}), 400
 
     conn = get_db()
     cur = conn.cursor()
 
-    # Update status to "In Use" (status_id = 2)
-    cur.execute("UPDATE ChargingPoint SET status_id = 2 WHERE charging_point_id = %s", (charging_point_id,))
+    in_use_status_id = get_status_id(cur, 'In Use', 2)
 
-    # Insert session
+    if session_id:
+        cur.execute("""
+            SELECT session_id, user_id, charging_point_id, end_time
+            FROM ChargingSession
+            WHERE session_id = %s AND charging_point_id = %s
+            LIMIT 1
+        """, (session_id, charging_point_id))
+        session = cur.fetchone()
+        if not session:
+            cur.close(); conn.close()
+            return jsonify({'error': 'Booking/session not found'}), 404
+        if int(session['user_id']) != int(user_id):
+            cur.close(); conn.close()
+            return jsonify({'error': 'This booking belongs to another user'}), 403
+        if session.get('end_time'):
+            cur.close(); conn.close()
+            return jsonify({'error': 'This session is already completed'}), 400
+
+        cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'message': 'Booked session started', 'session_id': int(session_id)})
+
     cur.execute("""
-        INSERT INTO ChargingSession (charging_point_id, user_id, start_time)
-        VALUES (%s, %s, NOW())
-    """, (charging_point_id, user_id))
+        SELECT cp.charging_point_id, cps.status_name
+        FROM ChargingPoint cp
+        LEFT JOIN ChargingPointStatus cps ON cp.status_id = cps.status_id
+        WHERE cp.charging_point_id = %s
+        LIMIT 1
+    """, (charging_point_id,))
+    point = cur.fetchone()
+    if not point:
+        cur.close(); conn.close()
+        return jsonify({'error': 'Charging point not found'}), 404
+    if point.get('status_name') != 'Available':
+        cur.close(); conn.close()
+        return jsonify({'error': 'Charging point is not available'}), 400
 
-    session_id = cur.lastrowid
+    cur.execute("""
+        SELECT session_id
+        FROM ChargingSession
+        WHERE charging_point_id = %s AND end_time IS NULL
+        LIMIT 1
+    """, (charging_point_id,))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        return jsonify({'error': 'Charging point already has an active booking/session'}), 409
+
+    session_id = get_next_session_id(cur)
+    cur.execute("""
+        INSERT INTO ChargingSession (session_id, charging_point_id, user_id, start_time)
+        VALUES (%s, %s, %s, NOW())
+    """, (session_id, charging_point_id, user_id))
+
+    cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -90,18 +159,91 @@ def start_session():
     return jsonify({'message': 'Session started', 'session_id': session_id})
 
 
+@sessions_bp.route('/api/session/book', methods=['POST'])
+def book_session():
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    charging_point_id = data.get('charging_point_id')
+
+    if user_id in (None, '') or charging_point_id in (None, ''):
+        return jsonify({'error': 'User and charging point are required'}), 400
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    reserved_status_id = get_status_id(cur, 'Reserved', 4)
+
+    cur.execute("""
+        SELECT cp.charging_point_id, cps.status_name
+        FROM ChargingPoint cp
+        LEFT JOIN ChargingPointStatus cps ON cp.status_id = cps.status_id
+        WHERE cp.charging_point_id = %s
+        LIMIT 1
+    """, (charging_point_id,))
+    point = cur.fetchone()
+    if not point:
+        cur.close(); conn.close()
+        return jsonify({'error': 'Charging point not found'}), 404
+    if point.get('status_name') != 'Available':
+        cur.close(); conn.close()
+        return jsonify({'error': 'Only available charging points can be booked'}), 400
+
+    cur.execute("""
+        SELECT session_id
+        FROM ChargingSession
+        WHERE charging_point_id = %s AND end_time IS NULL
+        LIMIT 1
+    """, (charging_point_id,))
+    if cur.fetchone():
+        cur.close(); conn.close()
+        return jsonify({'error': 'Charging point already has an active booking/session'}), 409
+
+    session_id = get_next_session_id(cur)
+    cur.execute("""
+        INSERT INTO ChargingSession (session_id, charging_point_id, user_id, start_time)
+        VALUES (%s, %s, %s, NOW())
+    """, (session_id, charging_point_id, user_id))
+
+    cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (reserved_status_id, charging_point_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({'message': 'Charging point booked', 'session_id': session_id})
+
+
 @sessions_bp.route('/api/session/end', methods=['POST'])
 def end_session():
-    data = request.get_json()
+    data = request.get_json() or {}
     session_id = data.get('session_id')
+    user_id = data.get('user_id')
     energy_consumed = data.get('energy_consumed', 0)
+
+    if session_id in (None, ''):
+        return jsonify({'error': 'Session ID is required'}), 400
+
+    if user_id in (None, ''):
+        return jsonify({'error': 'User ID is required'}), 400
+
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'User ID must be valid'}), 400
+
+    try:
+        energy_consumed = float(energy_consumed or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Energy consumed must be a valid number'}), 400
+
+    if energy_consumed < 0:
+        return jsonify({'error': 'Energy consumed cannot be negative'}), 400
 
     conn = get_db()
     cur = conn.cursor()
 
     # Get session info
     cur.execute("""
-        SELECT cs.charging_point_id, cp.price
+        SELECT cs.charging_point_id, cs.user_id, cs.end_time, cp.price
         FROM ChargingSession cs
         JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
         WHERE cs.session_id = %s
@@ -112,6 +254,14 @@ def end_session():
         cur.close(); conn.close()
         return jsonify({'error': 'Session not found'}), 404
 
+    if int(session['user_id']) != user_id:
+        cur.close(); conn.close()
+        return jsonify({'error': 'You can only end your own charging session'}), 403
+
+    if session.get('end_time'):
+        cur.close(); conn.close()
+        return jsonify({'error': 'Session is already completed'}), 400
+
     total_cost = round(energy_consumed * float(session['price']), 2)
 
     # Update session
@@ -121,8 +271,8 @@ def end_session():
         WHERE session_id = %s
     """, (energy_consumed, total_cost, session_id))
 
-    # Update status to "Available" (status_id = 1)
-    cur.execute("UPDATE ChargingPoint SET status_id = 1 WHERE charging_point_id = %s", (session['charging_point_id'],))
+    available_status_id = get_status_id(cur, 'Available', 1)
+    cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (available_status_id, session['charging_point_id']))
 
     conn.commit()
     cur.close()

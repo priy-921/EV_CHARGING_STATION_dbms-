@@ -4,6 +4,7 @@
 
 let map, userMarker, stationMarkers = [], allStations = [];
 let currentFilter = 'all';
+let compatibleConnectorIds = [];
 
 // Custom icons
 const greenIcon = L.divIcon({
@@ -68,7 +69,14 @@ function initMap() {
 
 async function loadStations(lat, lng) {
     try {
-        allStations = await api.getStations(lat, lng, 50);
+        if (!compatibleConnectorIds.length) {
+            allStations = [];
+            renderStations(allStations);
+            showToast('Add a vehicle with connector compatibility to see matching stations', 'error');
+            return;
+        }
+
+        allStations = await api.getStations(lat, lng, 50, compatibleConnectorIds);
         renderStations(allStations);
     } catch (e) {
         console.error('Failed to load stations:', e);
@@ -90,13 +98,15 @@ function renderStations(stations) {
         if (s.total_points === 0) icon = grayIcon;
 
         const distance = s.distance ? `${s.distance.toFixed(1)} km away` : '';
+        const stationName = s.display_name || s.name || `EV Charging Station #${s.station_id}`;
+        const address = s.full_address || s.address || s.street || s.city || '';
 
         const marker = L.marker([s.latitude, s.longitude], { icon })
             .addTo(map)
             .bindPopup(`
                 <div class="popup-content">
-                    <h3>${s.name || 'Station'}</h3>
-                    <p>📍 ${s.address || s.city || ''}</p>
+                    <h3>${stationName}</h3>
+                    <p>📍 ${address}</p>
                     <p>⚡ ${s.available_points || 0} / ${s.total_points || 0} available</p>
                     ${distance ? `<p>📏 ${distance}</p>` : ''}
                     <a href="station.html?id=${s.station_id}" class="btn btn-primary btn-sm" style="color:white;margin-top:12px;display:block;text-align:center;">View Details →</a>
@@ -136,7 +146,7 @@ function findNearestFast() {
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const { latitude, longitude } = pos.coords;
         try {
-            const stations = await api.getStations(latitude, longitude, 50);
+            const stations = await api.getStations(latitude, longitude, 50, compatibleConnectorIds);
             const available = stations.filter(s => s.available_points > 0);
             if (available.length > 0) {
                 const nearest = available[0]; // Already sorted by distance
@@ -165,9 +175,11 @@ function searchStation() {
     }
 
     const filtered = allStations.filter(s =>
+        (s.display_name || '').toLowerCase().includes(query) ||
         (s.name || '').toLowerCase().includes(query) ||
         (s.city || '').toLowerCase().includes(query) ||
-        (s.address || '').toLowerCase().includes(query)
+        (s.address || '').toLowerCase().includes(query) ||
+        (s.street || '').toLowerCase().includes(query)
     );
 
     renderStations(filtered);
@@ -178,4 +190,21 @@ function searchStation() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', initMap);
+async function loadCompatibleConnectorIds() {
+    const user = getCurrentUser();
+    const profile = await api.getUserProfile(user.user_id);
+    const userVehicles = profile.vehicles || [];
+    const connectorSets = await Promise.all(userVehicles.map(async vehicle => {
+        const connectors = await api.getVehicleConnectors(vehicle.vehicle_id);
+        return connectors.map(connector => Number(connector.connector_type_id));
+    }));
+
+    compatibleConnectorIds = [...new Set(connectorSets.flat())];
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    if (!requireAuth()) return;
+    enhanceNavbar('map');
+    await loadCompatibleConnectorIds();
+    initMap();
+});

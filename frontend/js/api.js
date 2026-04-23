@@ -1,13 +1,70 @@
 /* ============================================================
    api.js — Shared API helper for all frontend pages
    ============================================================ */
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = `${window.location.origin}/api`;
+const AUTH_STORAGE_KEY = 'evfinder_current_user';
+
+async function parseApiResponse(res, fallbackMessage) {
+    const contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (!res.ok) {
+            return { error: data.error || fallbackMessage };
+        }
+        return data;
+    }
+
+    if (!res.ok) {
+        return { error: fallbackMessage };
+    }
+
+    return {};
+}
 
 const api = {
+    /* ---------- Auth ---------- */
+    async login(userId, password) {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, password })
+        });
+        return parseApiResponse(res, 'Login failed on the server. Check the Flask terminal.');
+    },
+
+    async signup(payload) {
+        const res = await fetch(`${API_BASE}/auth/signup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return parseApiResponse(res, 'Signup failed on the server. Check the Flask terminal.');
+    },
+
+    async resetPassword(userId, email, newPassword) {
+        const res = await fetch(`${API_BASE}/auth/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, email, new_password: newPassword })
+        });
+        return parseApiResponse(res, 'Password reset failed on the server. Check the Flask terminal.');
+    },
+
     /* ---------- Stations ---------- */
-    async getStations(lat, lng, radius = 50) {
+    async getStations(lat, lng, radius = 50, connectorIds = []) {
         let url = `${API_BASE}/stations`;
-        if (lat && lng) url += `?lat=${lat}&lng=${lng}&radius=${radius}`;
+        const params = new URLSearchParams();
+        if (lat && lng) {
+            params.set('lat', lat);
+            params.set('lng', lng);
+            params.set('radius', radius);
+        }
+        if (connectorIds.length) {
+            params.set('connector_ids', connectorIds.join(','));
+        }
+        const query = params.toString();
+        if (query) url += `?${query}`;
         const res = await fetch(url);
         return res.json();
     },
@@ -26,6 +83,20 @@ const api = {
     async getVehicles() {
         const res = await fetch(`${API_BASE}/vehicles`);
         return res.json();
+    },
+
+    async getVehicleConnectors(vehicleId) {
+        const res = await fetch(`${API_BASE}/vehicles/${vehicleId}/connectors`);
+        return res.json();
+    },
+
+    async createVehicle(payload) {
+        const res = await fetch(`${API_BASE}/vehicles`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return parseApiResponse(res, 'Could not save vehicle. Check the Flask terminal.');
     },
 
     /* ---------- Estimate ---------- */
@@ -50,20 +121,43 @@ const api = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId })
         });
-        return res.json();
+        return parseApiResponse(res, 'Could not start session. Check the Flask terminal.');
     },
 
-    async endSession(sessionId, energyConsumed) {
+    async startBookedSession(userId, chargingPointId, sessionId) {
+        const res = await fetch(`${API_BASE}/session/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId, session_id: sessionId })
+        });
+        return parseApiResponse(res, 'Could not start booked session. Check the Flask terminal.');
+    },
+
+    async bookSession(userId, chargingPointId) {
+        const res = await fetch(`${API_BASE}/session/book`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId })
+        });
+        return parseApiResponse(res, 'Could not book charging point. Check the Flask terminal.');
+    },
+
+    async endSession(sessionId, userId, energyConsumed) {
         const res = await fetch(`${API_BASE}/session/end`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId, energy_consumed: energyConsumed })
+            body: JSON.stringify({ session_id: sessionId, user_id: userId, energy_consumed: energyConsumed })
         });
-        return res.json();
+        return parseApiResponse(res, 'Could not end session. Check the Flask terminal.');
     },
 
     async getUserSessions(userId) {
         const res = await fetch(`${API_BASE}/sessions/${userId}`);
+        return res.json();
+    },
+
+    async getUserProfile(userId) {
+        const res = await fetch(`${API_BASE}/users/${userId}/profile`);
         return res.json();
     },
 
@@ -79,7 +173,7 @@ const api = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ user_id: userId, station_id: stationId, rating, review_text: reviewText })
         });
-        return res.json();
+        return parseApiResponse(res, 'Could not submit review. Check the Flask terminal.');
     },
 
     /* ---------- ML Prediction ---------- */
@@ -92,6 +186,68 @@ const api = {
         return res.json();
     }
 };
+
+function setCurrentUser(user) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+}
+
+function getCurrentUser() {
+    try {
+        return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null');
+    } catch {
+        return null;
+    }
+}
+
+function clearCurrentUser() {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+}
+
+function isLoggedIn() {
+    return !!getCurrentUser();
+}
+
+function logout() {
+    clearCurrentUser();
+    window.location.href = '/';
+}
+
+function requireAuth() {
+    if (!isLoggedIn()) {
+        window.location.href = '/';
+        return null;
+    }
+    return getCurrentUser();
+}
+
+function redirectIfLoggedIn() {
+    if (isLoggedIn()) {
+        window.location.href = 'index.html';
+    }
+}
+
+function enhanceNavbar(activePage) {
+    const user = getCurrentUser();
+    const links = document.querySelector('.navbar-links');
+    if (!links) return;
+
+    const existing = document.getElementById('navAuthItem');
+    if (existing) existing.remove();
+
+    if (user) {
+        const item = document.createElement('li');
+        item.id = 'navAuthItem';
+        item.innerHTML = `<a href="#" onclick="logout();return false;">↪ Logout (${user.first_name})</a>`;
+        links.appendChild(item);
+    }
+
+    links.querySelectorAll('a').forEach(link => link.classList.remove('active'));
+    const map = { map: 'index.html', calculator: 'calculator.html', profile: 'profile.html' };
+    const activeHref = map[activePage];
+    if (!activeHref) return;
+    const activeLink = Array.from(links.querySelectorAll('a')).find(link => link.getAttribute('href') === activeHref);
+    if (activeLink) activeLink.classList.add('active');
+}
 
 /* ---------- Utility ---------- */
 function showToast(message, type = '') {

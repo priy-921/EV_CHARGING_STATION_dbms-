@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Login to EVFinder to view stations, charging history, and your EV profile.">
+    <title>EVFinder — Login</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="auth-body">
+    <div class="auth-shell">
+        <section class="auth-hero">
+            <div class="auth-brand">
+                <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#1D9E75"/><path d="M18 6L10 18h5l-1 8 8-12h-5l1-8z" fill="white" stroke="white" stroke-width="0.5" stroke-linejoin="round"/></svg>
+                <span>EVFinder</span>
+            </div>
+            <h1>Charge smarter, start with your account.</h1>
+            <p>Sign in to explore nearby stations, track sessions, and manage your EV profile in one place.</p>
+            <div class="auth-hero-note">
+                <strong>Demo login tip:</strong> existing users sign in with their `user_id` and password. New users can create an account here and get a fresh user ID stored in the database.
+            </div>
+        </section>
+
+        <section class="auth-card">
+            <div class="auth-tabs">
+                <button id="loginTab" class="auth-tab active" onclick="switchAuthMode('login')">Login</button>
+                <button id="signupTab" class="auth-tab" onclick="switchAuthMode('signup')">Sign Up</button>
+                <button id="resetTab" class="auth-tab" onclick="switchAuthMode('reset')">Forgot Password</button>
+            </div>
+
+            <form id="loginForm" class="auth-form" onsubmit="handleLogin(event)">
+                <h2>Welcome back</h2>
+                <div class="form-group">
+                    <label class="form-label">User ID</label>
+                    <input id="loginUserId" type="number" min="1" class="form-control" placeholder="1" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input id="loginPassword" type="password" class="form-control" placeholder="Enter your password" required>
+                </div>
+                <a href="#" class="auth-link" onclick="switchAuthMode('reset');return false;">Forgot password?</a>
+                <button class="btn btn-primary btn-lg auth-submit" type="submit">Login to EVFinder</button>
+            </form>
+
+            <form id="signupForm" class="auth-form hidden" onsubmit="handleSignup(event)">
+                <h2>Create your account</h2>
+                <div class="form-group">
+                    <label class="form-label">First Name</label>
+                    <input id="signupFirstName" type="text" class="form-control" placeholder="Aarav" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Last Name</label>
+                    <input id="signupLastName" type="text" class="form-control" placeholder="Sharma" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Email</label>
+                    <input id="signupEmail" type="email" class="form-control" placeholder="you@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Phone</label>
+                    <input id="signupPhone" type="tel" class="form-control" placeholder="9876543210" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input id="signupPassword" type="password" class="form-control" placeholder="Create a password" minlength="6" required>
+                </div>
+                <button class="btn btn-primary btn-lg auth-submit" type="submit">Create Account</button>
+            </form>
+
+            <form id="resetForm" class="auth-form hidden" onsubmit="handleResetPassword(event)">
+                <h2>Reset your password</h2>
+                <div class="form-group">
+                    <label class="form-label">User ID</label>
+                    <input id="resetUserId" type="number" min="1" class="form-control" placeholder="1" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Registered Email</label>
+                    <input id="resetEmail" type="email" class="form-control" placeholder="you@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">New Password</label>
+                    <input id="resetPassword" type="password" class="form-control" placeholder="Create a new password" minlength="6" required>
+                </div>
+                <button class="btn btn-primary btn-lg auth-submit" type="submit">Reset Password</button>
+            </form>
+        </section>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/login.js"></script>
+</body>
+</html>

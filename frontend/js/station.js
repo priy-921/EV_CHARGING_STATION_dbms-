@@ -6,19 +6,23 @@ let stationId = null;
 let stationData = null;
 let vehicles = [];
 let peakChart = null;
+let currentUser = null;
 
 document.addEventListener('DOMContentLoaded', () => {
+    currentUser = requireAuth();
+    if (!currentUser) return;
+    enhanceNavbar('map');
+
     const params = new URLSearchParams(window.location.search);
     stationId = params.get('id');
     if (!stationId) {
         showToast('No station ID provided', 'error');
         return;
     }
-    loadStationDetail();
-    loadVehicles();
+    loadVehicles().then(loadStationDetail);
     loadReviews();
     loadPeakHours();
-    loadPrediction();
+    renderReviewUser();
 });
 
 async function loadStationDetail() {
@@ -27,6 +31,7 @@ async function loadStationDetail() {
         stationData = data;
         renderStationHeader(data.station);
         renderChargingPoints(data.charging_points);
+        loadPrediction();
     } catch (e) {
         console.error(e);
         showToast('Failed to load station details', 'error');
@@ -34,14 +39,39 @@ async function loadStationDetail() {
 }
 
 function renderStationHeader(s) {
+    const points = filterCompatibleChargingPoints(stationData.charging_points || []);
+    const availableCount = points.filter(p => p.status_name === 'Available').length;
+    const address = s.full_address || [s.address || s.street, s.city, s.state, s.pincode || s.zip].filter(Boolean).join(', ');
+    const phone = s.contact_number || s.contact || 'N/A';
+    const stationName = s.display_name || s.name || `EV Charging Station #${s.station_id}`;
+    const coordinates = s.latitude && s.longitude ? `${Number(s.latitude).toFixed(4)}, ${Number(s.longitude).toFixed(4)}` : 'N/A';
+
     document.getElementById('stationHeader').innerHTML = `
         <div class="station-header">
-            <h1 class="station-name">${s.name || 'Charging Station'}</h1>
-            <p class="station-address">📍 ${s.address || ''}, ${s.city || ''}, ${s.state || ''} ${s.pincode || ''}</p>
+            <h1 class="station-name">${stationName}</h1>
+            <p class="station-address">📍 ${address || 'Address not available'}</p>
             <div class="station-meta">
-                <span class="station-meta-item">📞 ${s.contact_number || 'N/A'}</span>
-                <span class="station-meta-item">⚡ ${stationData.charging_points.length} Charging Points</span>
-                <span class="station-meta-item">✅ ${stationData.charging_points.filter(p => p.status_name === 'Available').length} Available</span>
+                <span class="station-meta-item">📞 ${phone}</span>
+                <span class="station-meta-item">⚡ ${points.length} Compatible Points</span>
+                <span class="station-meta-item">✅ ${availableCount} Available</span>
+            </div>
+            <div class="station-detail-grid">
+                <div class="station-detail-item">
+                    <span>Station ID</span>
+                    <strong>${s.station_id}</strong>
+                </div>
+                <div class="station-detail-item">
+                    <span>City</span>
+                    <strong>${s.city || 'N/A'}</strong>
+                </div>
+                <div class="station-detail-item">
+                    <span>PIN Code</span>
+                    <strong>${s.pincode || s.zip || 'N/A'}</strong>
+                </div>
+                <div class="station-detail-item">
+                    <span>Coordinates</span>
+                    <strong>${coordinates}</strong>
+                </div>
             </div>
         </div>
     `;
@@ -49,12 +79,14 @@ function renderStationHeader(s) {
 
 function renderChargingPoints(points) {
     const grid = document.getElementById('cpGrid');
-    if (!points.length) {
-        grid.innerHTML = '<p style="color:var(--text-muted);">No charging points found.</p>';
+    const compatiblePoints = filterCompatibleChargingPoints(points);
+
+    if (!compatiblePoints.length) {
+        grid.innerHTML = '<p style="color:var(--text-muted);">No compatible charging points found for your selected vehicle.</p>';
         return;
     }
 
-    grid.innerHTML = points.map(p => `
+    grid.innerHTML = compatiblePoints.map(p => `
         <div class="cp-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
                 <div class="cp-power">${p.power_rating || 0}<span> kW</span></div>
@@ -63,6 +95,7 @@ function renderChargingPoints(points) {
             <p class="cp-type">🔌 ${p.connector_name || 'Unknown Connector'}</p>
             <p class="cp-type">⚡ ${p.charger_name || 'Unknown Charger'}</p>
             <p class="cp-price">₹${p.price || 0}/kWh</p>
+            ${renderSessionActions(p)}
         </div>
     `).join('');
 
@@ -70,24 +103,176 @@ function renderChargingPoints(points) {
     const cpSelect = document.getElementById('cpSelect');
     if (cpSelect) {
         cpSelect.innerHTML = '<option value="">Select Charging Point</option>';
-        points.filter(p => p.status_name === 'Available').forEach(p => {
+        compatiblePoints.filter(p => p.status_name === 'Available').forEach(p => {
             cpSelect.innerHTML += `<option value="${p.charging_point_id}">${p.connector_name} — ${p.power_rating}kW — ₹${p.price}/kWh</option>`;
         });
     }
 }
 
+function getSelectedVehicle() {
+    const selectedVehicleId = document.getElementById('vehicleSelect')?.value;
+    return vehicles.find(vehicle => String(vehicle.vehicle_id) === String(selectedVehicleId)) || vehicles[0] || null;
+}
+
+function filterCompatibleChargingPoints(points) {
+    const vehicle = getSelectedVehicle();
+    if (!vehicle) return [];
+
+    const connectorIds = vehicle.connector_type_ids || [];
+    if (!connectorIds.length) return [];
+
+    return points.filter(point => connectorIds.includes(Number(point.connector_type_id)));
+}
+
+function renderSessionActions(point) {
+    const status = point.status_name || '';
+    const ownsOpenSession = currentUser && point.active_user_id && Number(point.active_user_id) === Number(currentUser.user_id);
+
+    if (status === 'Available') {
+        return `
+            <div class="cp-actions">
+                <button class="btn btn-outline btn-sm" onclick="bookChargingPoint(${point.charging_point_id})">Book</button>
+                <button class="btn btn-primary btn-sm" onclick="startChargingSession(${point.charging_point_id})">Start Session</button>
+            </div>
+        `;
+    }
+
+    if (status === 'Reserved' && ownsOpenSession) {
+        return `
+            <div class="cp-actions">
+                <button class="btn btn-primary btn-sm" onclick="startBookedChargingSession(${point.charging_point_id}, ${point.active_session_id})">Start Booked Session</button>
+            </div>
+        `;
+    }
+
+    if (status === 'In Use' && ownsOpenSession) {
+        return `
+            <div class="cp-actions cp-end-session">
+                <input id="energy-${point.active_session_id}" type="number" min="0" step="0.1" class="form-control" placeholder="kWh used">
+                <button class="btn btn-danger btn-sm" onclick="endChargingSession(${point.active_session_id})">End Session</button>
+            </div>
+        `;
+    }
+
+    if (status === 'Reserved') {
+        return '<p class="cp-note">Reserved by another user.</p>';
+    }
+
+    if (status === 'In Use') {
+        return '<p class="cp-note">Currently in use.</p>';
+    }
+
+    return '';
+}
+
+async function bookChargingPoint(chargingPointId) {
+    try {
+        const result = await api.bookSession(currentUser.user_id, chargingPointId);
+        if (result.error) {
+            showToast(result.error, 'error');
+            return;
+        }
+        showToast('Charging point booked', 'success');
+        await loadStationDetail();
+    } catch (error) {
+        console.error(error);
+        showToast('Failed to book charging point', 'error');
+    }
+}
+
+async function startChargingSession(chargingPointId) {
+    try {
+        const result = await api.startSession(currentUser.user_id, chargingPointId);
+        if (result.error) {
+            showToast(result.error, 'error');
+            return;
+        }
+        showToast('Charging session started', 'success');
+        await loadStationDetail();
+    } catch (error) {
+        console.error(error);
+        showToast('Failed to start session', 'error');
+    }
+}
+
+async function startBookedChargingSession(chargingPointId, sessionId) {
+    try {
+        const result = await api.startBookedSession(currentUser.user_id, chargingPointId, sessionId);
+        if (result.error) {
+            showToast(result.error, 'error');
+            return;
+        }
+        showToast('Booked session started', 'success');
+        await loadStationDetail();
+    } catch (error) {
+        console.error(error);
+        showToast('Failed to start booked session', 'error');
+    }
+}
+
+async function endChargingSession(sessionId) {
+    const input = document.getElementById(`energy-${sessionId}`);
+    const energyConsumed = input ? input.value : 0;
+
+    if (energyConsumed === '' || Number(energyConsumed) < 0) {
+        showToast('Enter valid kWh used', 'error');
+        return;
+    }
+
+    try {
+        const result = await api.endSession(sessionId, currentUser.user_id, energyConsumed);
+        if (result.error) {
+            showToast(result.error, 'error');
+            return;
+        }
+        showToast(`Session ended. Cost: ${formatCurrency(result.total_cost)}`, 'success');
+        await loadStationDetail();
+    } catch (error) {
+        console.error(error);
+        showToast('Failed to end session', 'error');
+    }
+}
+
 async function loadVehicles() {
     try {
-        vehicles = await api.getVehicles();
+        const profile = await api.getUserProfile(currentUser.user_id);
+        if (profile.error) {
+            showToast(profile.error, 'error');
+            vehicles = [];
+        } else {
+            vehicles = profile.vehicles || [];
+            vehicles = await Promise.all(vehicles.map(async vehicle => {
+                const connectors = await api.getVehicleConnectors(vehicle.vehicle_id);
+                return {
+                    ...vehicle,
+                    connector_type_ids: connectors.map(connector => Number(connector.connector_type_id))
+                };
+            }));
+        }
+
         const select = document.getElementById('vehicleSelect');
         if (select) {
             select.innerHTML = '<option value="">Select Your Vehicle</option>';
             vehicles.forEach(v => {
                 select.innerHTML += `<option value="${v.vehicle_id}">${v.brand} ${v.model} (${v.battery_capacity} kWh)</option>`;
             });
+
+            if (!vehicles.length) {
+                select.innerHTML = '<option value="">No vehicles saved in your profile</option>';
+            } else {
+                select.value = vehicles[0].vehicle_id;
+                select.onchange = () => {
+                    if (stationData?.charging_points) {
+                        renderStationHeader(stationData.station);
+                        renderChargingPoints(stationData.charging_points);
+                        loadPrediction();
+                    }
+                };
+            }
         }
     } catch (e) {
         console.error(e);
+        showToast('Failed to load your vehicles', 'error');
     }
 }
 
@@ -143,6 +328,20 @@ function updateTargetValue(val) {
 
 async function loadPrediction() {
     try {
+        const compatiblePoints = filterCompatibleChargingPoints(stationData?.charging_points || []);
+        const availableCount = compatiblePoints.filter(point => point.status_name === 'Available').length;
+
+        if (availableCount > 0) {
+            document.getElementById('predictionBox').innerHTML = `
+                <div class="prediction-box">
+                    <div class="prediction-label">🤖 AI Predicted Wait Time</div>
+                    <div class="prediction-value">0</div>
+                    <div class="prediction-unit">minutes (${availableCount} compatible charger${availableCount === 1 ? '' : 's'} available)</div>
+                </div>
+            `;
+            return;
+        }
+
         const now = new Date();
         const hour = now.getHours();
         const day = now.getDay() === 0 ? 6 : now.getDay() - 1; // JS 0=Sun, Python 0=Mon
@@ -231,7 +430,7 @@ async function loadReviews() {
         const container = document.getElementById('reviewsList');
 
         if (!reviews.length) {
-            container.innerHTML = '<p style="color:var(--text-muted);">No reviews yet. Be the first!</p>';
+            container.innerHTML = '<p style="color:var(--text-muted);">No reviews yet for this station. Be the first!</p>';
             return;
         }
 
@@ -252,6 +451,17 @@ async function loadReviews() {
     }
 }
 
+function renderReviewUser() {
+    const oldUserSelect = document.getElementById('reviewUserId');
+    if (oldUserSelect) {
+        oldUserSelect.closest('.form-group')?.remove();
+    }
+
+    const userEl = document.getElementById('reviewCurrentUser');
+    if (!userEl || !currentUser) return;
+    userEl.textContent = `Posting as ${currentUser.first_name} ${currentUser.last_name}`;
+}
+
 // Star rating input
 let selectedRating = 0;
 function setRating(n) {
@@ -262,15 +472,18 @@ function setRating(n) {
 }
 
 async function submitReview() {
-    const userId = document.getElementById('reviewUserId').value;
     const reviewText = document.getElementById('reviewText').value.trim();
 
-    if (!userId) { showToast('Please select a user', 'error'); return; }
+    if (!currentUser) { showToast('Please log in to review this station', 'error'); return; }
     if (!selectedRating) { showToast('Please select a rating', 'error'); return; }
     if (!reviewText) { showToast('Please write a review', 'error'); return; }
 
     try {
-        await api.postReview(userId, stationId, selectedRating, reviewText);
+        const result = await api.postReview(currentUser.user_id, stationId, selectedRating, reviewText);
+        if (result.error) {
+            showToast(result.error, 'error');
+            return;
+        }
         showToast('Review submitted!', 'success');
         document.getElementById('reviewText').value = '';
         selectedRating = 0;

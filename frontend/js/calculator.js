@@ -17,6 +17,9 @@ const chargerSpeeds = [
 ];
 
 document.addEventListener('DOMContentLoaded', async () => {
+    if (!requireAuth()) return;
+    enhanceNavbar('calculator');
+
     try {
         calcVehicles = await api.getVehicles();
         const select = document.getElementById('calcVehicle');
