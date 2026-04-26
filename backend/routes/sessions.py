@@ -5,6 +5,14 @@ from datetime import datetime
 sessions_bp = Blueprint('sessions', __name__)
 
 
+def build_station_name(row):
+    street = row.get('street') or row.get('address') or ''
+    city = row.get('city') or ''
+    locality = street.split(',')[0].strip() if street else city
+    fallback_name = f"{locality} EV Charging Station" if locality else f"EV Charging Station #{row.get('station_id')}"
+    return row.get('station_name') or fallback_name
+
+
 def get_status_id(cur, status_name, fallback_id):
     cur.execute("""
         SELECT status_id
@@ -287,7 +295,7 @@ def get_user_sessions(user_id):
     cur = conn.cursor()
     cur.execute("""
         SELECT cs.session_id, cs.start_time, cs.end_time, cs.energy_consumed, cs.total_cost,
-               s.name AS station_name, cp.power_rating,
+               s.station_id, s.name AS station_name, s.street, s.city, cp.power_rating,
                TIMESTAMPDIFF(MINUTE, cs.start_time, cs.end_time) AS duration_minutes
         FROM ChargingSession cs
         JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
@@ -309,6 +317,10 @@ def get_user_sessions(user_id):
                 row[key] = val
             else:
                 row[key] = float(val) if val is not None else None
+        row['station_name'] = build_station_name(row)
+        row.pop('street', None)
+        row.pop('city', None)
+        row.pop('station_id', None)
         result.append(row)
 
     return jsonify(result)
