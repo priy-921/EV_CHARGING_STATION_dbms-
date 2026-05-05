@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 import math
+from datetime import timedelta
 
 stations_bp = Blueprint('stations', __name__)
 
@@ -160,6 +161,8 @@ def get_station_detail(station_id):
         for key, val in obj.items():
             if isinstance(val, (int, float, str, type(None), bool)):
                 result[key] = val
+            elif isinstance(val, timedelta):
+                result[key] = str(val)
             elif hasattr(val, 'isoformat'):
                 result[key] = str(val)
             else:

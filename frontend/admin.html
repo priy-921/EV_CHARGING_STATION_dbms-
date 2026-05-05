@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Administrator dashboard for EVFinder users, charging sessions, and station operations.">
+    <title>EVFinder - Administrator</title>
+    <link rel="stylesheet" href="css/style.css?v=9">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="admin.html" class="navbar-brand">
+            <svg viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#1D9E75"/><path d="M18 6L10 18h5l-1 8 8-12h-5l1-8z" fill="white" stroke="white" stroke-width="0.5" stroke-linejoin="round"/></svg>
+            EVFinder
+        </a>
+        <button class="mobile-menu-btn" onclick="document.querySelector('.navbar-links').classList.toggle('open')">Menu</button>
+        <ul class="navbar-links">
+            <li><a href="admin.html" class="active">Admin</a></li>
+        </ul>
+    </nav>
+
+    <main class="page-container admin-page">
+        <div class="admin-header">
+            <div>
+                <h1 class="page-title">Administrator Dashboard</h1>
+                <p class="page-subtitle">Monitor users, charging sessions, stations, and live charger operations.</p>
+            </div>
+            <button class="btn btn-outline" onclick="loadAdminDashboard()">Refresh</button>
+        </div>
+
+        <div id="adminSummary" class="stats-grid">
+            <div class="spinner"></div>
+        </div>
+
+        <section class="section">
+            <h2 class="section-title">Station Operations</h2>
+            <div id="stationOperations" class="admin-station-list">
+                <div class="spinner"></div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2 class="section-title">All Users</h2>
+            <div id="adminUsers">
+                <p style="color:var(--text-muted);text-align:center;padding:40px;">Loading users...</p>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2 class="section-title">Charging Sessions</h2>
+            <div id="adminSessions">
+                <p style="color:var(--text-muted);text-align:center;padding:40px;">Loading sessions...</p>
+            </div>
+        </section>
+    </main>
+
+    <script src="js/api.js?v=11"></script>
+    <script src="js/admin.js?v=1"></script>
+</body>
+</html>

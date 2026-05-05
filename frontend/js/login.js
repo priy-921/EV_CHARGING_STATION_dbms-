@@ -1,6 +1,60 @@
 document.addEventListener('DOMContentLoaded', () => {
+    setupRoleStationControls();
+    loadStationChoices();
     redirectIfLoggedIn();
 });
+
+function setupRoleStationControls() {
+    document.querySelectorAll('input[name="loginRole"], input[name="signupRole"]').forEach(input => {
+        input.addEventListener('change', updateRoleStationVisibility);
+    });
+    updateRoleStationVisibility();
+}
+
+function updateRoleStationVisibility() {
+    const loginRole = document.querySelector('input[name="loginRole"]:checked')?.value || 'user';
+    const signupRole = document.querySelector('input[name="signupRole"]:checked')?.value || 'user';
+    const loginGroup = document.getElementById('loginAdminStationGroup');
+    const signupGroup = document.getElementById('signupAdminStationGroup');
+    const loginSelect = document.getElementById('loginAdminStation');
+    const signupSelect = document.getElementById('signupAdminStation');
+
+    loginGroup?.classList.toggle('hidden', loginRole !== 'admin');
+    signupGroup?.classList.toggle('hidden', signupRole !== 'admin');
+
+    if (loginSelect) loginSelect.required = loginRole === 'admin';
+    if (signupSelect) signupSelect.required = signupRole === 'admin';
+}
+
+async function loadStationChoices() {
+    try {
+        const stations = await api.getStations();
+        const options = [
+            '<option value="">Select station</option>',
+            ...stations.map(station => {
+                const name = station.display_name || station.name || `Station #${station.station_id}`;
+                const address = station.full_address || [station.street || station.address, station.city].filter(Boolean).join(', ');
+                return `<option value="${station.station_id}">${escapeOptionText(name)}${address ? ` - ${escapeOptionText(address)}` : ''}</option>`;
+            })
+        ].join('');
+
+        ['loginAdminStation', 'signupAdminStation'].forEach(id => {
+            const select = document.getElementById(id);
+            if (select) select.innerHTML = options;
+        });
+    } catch (error) {
+        console.error(error);
+        showToast('Could not load station list', 'error');
+    }
+}
+
+function escapeOptionText(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+}
 
 function switchAuthMode(mode) {
     const isLogin = mode === 'login';
@@ -19,17 +73,24 @@ async function handleLogin(event) {
 
     const userId = document.getElementById('loginUserId').value.trim();
     const password = document.getElementById('loginPassword').value;
+    const selectedRole = document.querySelector('input[name="loginRole"]:checked')?.value || 'user';
+    const adminStationId = selectedRole === 'admin' ? document.getElementById('loginAdminStation').value : null;
 
     try {
-        const result = await api.login(userId, password);
+        const result = await api.login(userId, password, selectedRole, adminStationId);
         if (result.error) {
             showToast(result.error, 'error');
             return;
         }
 
+        if ((result.user.role || 'user') !== selectedRole) {
+            showToast(`This account is registered as ${result.user.role || 'user'}. Choose the correct role.`, 'error');
+            return;
+        }
+
         setCurrentUser(result.user);
         showToast('Login successful', 'success');
-        window.location.href = 'index.html';
+        window.location.href = selectedRole === 'admin' ? 'admin.html' : 'index.html';
     } catch (error) {
         console.error(error);
         showToast('Login failed. Please try again.', 'error');
@@ -44,8 +105,12 @@ async function handleSignup(event) {
         last_name: document.getElementById('signupLastName').value.trim(),
         email: document.getElementById('signupEmail').value.trim(),
         phone: document.getElementById('signupPhone').value.trim(),
-        password: document.getElementById('signupPassword').value
+        password: document.getElementById('signupPassword').value,
+        role: document.querySelector('input[name="signupRole"]:checked')?.value || 'user'
     };
+    if (payload.role === 'admin') {
+        payload.admin_station_id = document.getElementById('signupAdminStation').value;
+    }
 
     try {
         const result = await api.signup(payload);
@@ -56,7 +121,7 @@ async function handleSignup(event) {
 
         setCurrentUser(result.user);
         showToast(`Signup successful. Your User ID is ${result.user.user_id}`, 'success');
-        window.location.href = 'index.html';
+        window.location.href = result.user.role === 'admin' ? 'admin.html' : 'index.html';
     } catch (error) {
         console.error(error);
         showToast('Signup failed. Please try again.', 'error');

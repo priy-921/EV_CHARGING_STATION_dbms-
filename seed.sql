@@ -25,7 +25,8 @@ INSERT INTO `User` (user_id, first_name, last_name, email, phone, password, role
 (17, 'Om',       'Thakur',   'om.thakur@gmail.com',       '9876543226', 'pass1234', 'user', 18.5510, 73.8350, '2026-04-07 16:00:00'),
 (18, 'Tanvi',    'Rajput',   'tanvi.rajp@gmail.com',      '9876543227', 'pass1234', 'user', 18.4830, 73.8900, '2026-04-07 12:30:00'),
 (19, 'Yash',     'Nikam',    'yash.nikam@gmail.com',      '9876543228', 'pass1234', 'user', 18.5670, 73.8120, '2026-04-06 09:00:00'),
-(20, 'Nisha',    'Kale',     'nisha.kale@gmail.com',      '9876543229', 'pass1234', 'user', 18.5140, 73.8640, '2026-04-06 11:45:00');
+(20, 'Nisha',    'Kale',     'nisha.kale@gmail.com',      '9876543229', 'pass1234', 'user', 18.5140, 73.8640, '2026-04-06 11:45:00'),
+(21, 'Admin',    'Operator', 'admin@evfinder.local',      '9876543230', 'admin123', 'admin', NULL, NULL, NULL);
 
 -- ============================================================
 -- 2. Vehicle (vehicle_id 1-10)

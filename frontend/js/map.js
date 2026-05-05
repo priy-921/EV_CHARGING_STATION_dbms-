@@ -203,7 +203,7 @@ async function loadCompatibleConnectorIds() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    if (!requireAuth()) return;
+    if (!requireUser()) return;
     enhanceNavbar('map');
     await loadCompatibleConnectorIds();
     initMap();

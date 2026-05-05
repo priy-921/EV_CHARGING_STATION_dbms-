@@ -17,7 +17,7 @@ const chargerSpeeds = [
 ];
 
 document.addEventListener('DOMContentLoaded', async () => {
-    if (!requireAuth()) return;
+    if (!requireUser()) return;
     enhanceNavbar('calculator');
 
     try {

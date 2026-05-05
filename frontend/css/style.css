@@ -1018,6 +1018,51 @@ tbody tr:last-child td { border-bottom: none; }
     font-size: 1.5rem;
 }
 
+.role-toggle {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    background: #f3f5f7;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+}
+
+.role-option {
+    position: relative;
+    min-height: 42px;
+    cursor: pointer;
+}
+
+.role-option input {
+    position: absolute;
+    opacity: 0;
+    inset: 0;
+    cursor: pointer;
+}
+
+.role-option span {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-weight: 700;
+    transition: var(--transition);
+}
+
+.role-option input:checked + span {
+    background: var(--white);
+    color: var(--green);
+    box-shadow: var(--shadow-sm);
+}
+
+.role-option input:focus-visible + span {
+    outline: 2px solid var(--green);
+    outline-offset: 2px;
+}
+
 .auth-submit {
     width: 100%;
     margin-top: 8px;
@@ -1110,6 +1155,58 @@ tbody tr:last-child td { border-bottom: none; }
     min-height: 46px;
 }
 
+/* ---------- Admin ---------- */
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 24px;
+}
+
+.admin-station-list {
+    display: grid;
+    gap: 20px;
+}
+
+.admin-station-card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+}
+
+.admin-station-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.admin-station-header h3 {
+    font-size: 1.05rem;
+    margin-bottom: 4px;
+}
+
+.admin-station-header p,
+.admin-muted {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+}
+
+.admin-action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 240px;
+}
+
+.form-control-sm {
+    padding: 7px 10px;
+    font-size: 0.82rem;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 768px) {
     .auth-shell,
@@ -1171,6 +1268,17 @@ tbody tr:last-child td { border-bottom: none; }
 
     .vehicle-metrics {
         text-align: left;
+    }
+
+    .admin-header,
+    .admin-station-header,
+    .admin-action-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .admin-action-row {
+        min-width: 180px;
     }
 }
 

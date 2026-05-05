@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from db import get_db
+from db import get_db, ensure_user_station_columns
 from datetime import datetime
 
 sessions_bp = Blueprint('sessions', __name__)
@@ -27,6 +27,32 @@ def get_status_id(cur, status_name, fallback_id):
 def get_next_session_id(cur):
     cur.execute("SELECT COALESCE(MAX(session_id), 0) + 1 AS next_session_id FROM ChargingSession")
     return cur.fetchone()['next_session_id']
+
+
+def get_admin_station_id(cur, user_id):
+    if user_id in (None, ''):
+        return None
+
+    cur.execute("""
+        SELECT role, admin_station_id
+        FROM `User`
+        WHERE user_id = %s
+        LIMIT 1
+    """, (user_id,))
+    user = cur.fetchone()
+    if not user or (user.get('role') or '').lower() != 'admin':
+        return None
+    return user.get('admin_station_id')
+
+
+def charging_point_belongs_to_station(cur, charging_point_id, station_id):
+    cur.execute("""
+        SELECT charging_point_id
+        FROM ChargingPoint
+        WHERE charging_point_id = %s AND station_id = %s
+        LIMIT 1
+    """, (charging_point_id, station_id))
+    return cur.fetchone() is not None
 
 
 @sessions_bp.route('/api/estimate', methods=['POST'])
@@ -95,12 +121,23 @@ def start_session():
     user_id = data.get('user_id')
     charging_point_id = data.get('charging_point_id')
     session_id = data.get('session_id')
+    admin_user_id = data.get('admin_user_id')
 
     if user_id in (None, '') or charging_point_id in (None, ''):
         return jsonify({'error': 'User and charging point are required'}), 400
 
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
+
+    admin_station_id = get_admin_station_id(cur, admin_user_id)
+    if not admin_station_id:
+        cur.close(); conn.close()
+        return jsonify({'error': 'Only administrators can start charging sessions'}), 403
+
+    if not charging_point_belongs_to_station(cur, charging_point_id, admin_station_id):
+        cur.close(); conn.close()
+        return jsonify({'error': 'Administrators can only manage their assigned station'}), 403
 
     in_use_status_id = get_status_id(cur, 'In Use', 2)
 
@@ -176,13 +213,14 @@ def book_session():
     if user_id in (None, '') or charging_point_id in (None, ''):
         return jsonify({'error': 'User and charging point are required'}), 400
 
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
 
     reserved_status_id = get_status_id(cur, 'Reserved', 4)
 
     cur.execute("""
-        SELECT cp.charging_point_id, cps.status_name
+        SELECT cp.charging_point_id, cp.station_id, cps.status_name
         FROM ChargingPoint cp
         LEFT JOIN ChargingPointStatus cps ON cp.status_id = cps.status_id
         WHERE cp.charging_point_id = %s
@@ -213,6 +251,7 @@ def book_session():
     """, (session_id, charging_point_id, user_id))
 
     cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (reserved_status_id, charging_point_id))
+    cur.execute("UPDATE `User` SET selected_station_id = %s WHERE user_id = %s", (point['station_id'], user_id))
     conn.commit()
     cur.close()
     conn.close()
@@ -225,18 +264,11 @@ def end_session():
     data = request.get_json() or {}
     session_id = data.get('session_id')
     user_id = data.get('user_id')
+    admin_user_id = data.get('admin_user_id')
     energy_consumed = data.get('energy_consumed', 0)
 
     if session_id in (None, ''):
         return jsonify({'error': 'Session ID is required'}), 400
-
-    if user_id in (None, ''):
-        return jsonify({'error': 'User ID is required'}), 400
-
-    try:
-        user_id = int(user_id)
-    except (TypeError, ValueError):
-        return jsonify({'error': 'User ID must be valid'}), 400
 
     try:
         energy_consumed = float(energy_consumed or 0)
@@ -246,12 +278,18 @@ def end_session():
     if energy_consumed < 0:
         return jsonify({'error': 'Energy consumed cannot be negative'}), 400
 
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
 
+    admin_station_id = get_admin_station_id(cur, admin_user_id)
+    if not admin_station_id:
+        cur.close(); conn.close()
+        return jsonify({'error': 'Only administrators can end charging sessions'}), 403
+
     # Get session info
     cur.execute("""
-        SELECT cs.charging_point_id, cs.user_id, cs.end_time, cp.price
+        SELECT cs.charging_point_id, cs.user_id, cs.end_time, cp.price, cp.station_id
         FROM ChargingSession cs
         JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
         WHERE cs.session_id = %s
@@ -262,9 +300,13 @@ def end_session():
         cur.close(); conn.close()
         return jsonify({'error': 'Session not found'}), 404
 
-    if int(session['user_id']) != user_id:
+    if int(session['station_id']) != int(admin_station_id):
         cur.close(); conn.close()
-        return jsonify({'error': 'You can only end your own charging session'}), 403
+        return jsonify({'error': 'Administrators can only manage their assigned station'}), 403
+
+    if user_id not in (None, '') and int(session['user_id']) != int(user_id):
+        cur.close(); conn.close()
+        return jsonify({'error': 'This session belongs to another user'}), 403
 
     if session.get('end_time'):
         cur.close(); conn.close()

@@ -114,7 +114,7 @@
         let profileVehicles = [];
 
         document.addEventListener('DOMContentLoaded', async () => {
-            currentUser = requireAuth();
+            currentUser = requireUser();
             if (!currentUser) return;
 
             enhanceNavbar('profile');

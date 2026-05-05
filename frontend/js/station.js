@@ -7,9 +7,14 @@ let stationData = null;
 let vehicles = [];
 let peakChart = null;
 let currentUser = null;
+let watchedSessionIds = new Set();
+let notifiedEndedSessionIds = new Set(
+    JSON.parse(sessionStorage.getItem('evfinder_notified_ended_sessions') || '[]')
+);
+let sessionWatcherId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
-    currentUser = requireAuth();
+    currentUser = requireUser();
     if (!currentUser) return;
     enhanceNavbar('map');
 
@@ -23,18 +28,69 @@ document.addEventListener('DOMContentLoaded', () => {
     loadReviews();
     loadPeakHours();
     renderReviewUser();
+    sessionWatcherId = setInterval(checkWatchedSessions, 5000);
 });
 
 async function loadStationDetail() {
     try {
         const data = await api.getStationDetail(stationId);
         stationData = data;
+        markSelectedStation();
+        watchCurrentUserSessions(data.charging_points || []);
         renderStationHeader(data.station);
         renderChargingPoints(data.charging_points);
         loadPrediction();
     } catch (e) {
         console.error(e);
         showToast('Failed to load station details', 'error');
+    }
+}
+
+function watchCurrentUserSessions(points) {
+    points.forEach(point => {
+        const ownsOpenSession = point.active_user_id && Number(point.active_user_id) === Number(currentUser.user_id);
+        if (ownsOpenSession && point.active_session_id) {
+            watchedSessionIds.add(Number(point.active_session_id));
+        }
+    });
+}
+
+function rememberEndedSession(sessionId) {
+    notifiedEndedSessionIds.add(Number(sessionId));
+    sessionStorage.setItem('evfinder_notified_ended_sessions', JSON.stringify([...notifiedEndedSessionIds]));
+}
+
+async function checkWatchedSessions() {
+    if (!currentUser || !watchedSessionIds.size) return;
+
+    try {
+        const sessions = await api.getUserSessions(currentUser.user_id);
+        const sessionMap = new Map((sessions || []).map(session => [Number(session.session_id), session]));
+
+        watchedSessionIds.forEach(sessionId => {
+            const session = sessionMap.get(Number(sessionId));
+            if (!session || !session.end_time || notifiedEndedSessionIds.has(Number(sessionId))) return;
+
+            rememberEndedSession(sessionId);
+            watchedSessionIds.delete(Number(sessionId));
+            showToast(`Your charging session has ended. Billing amount: ${formatCurrency(session.total_cost)}`, 'success');
+            loadStationDetail();
+        });
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+async function markSelectedStation() {
+    if (!currentUser || currentUser.role === 'admin' || !stationId) return;
+    try {
+        const result = await api.selectUserStation(currentUser.user_id, stationId);
+        if (!result.error) {
+            currentUser.selected_station_id = Number(stationId);
+            setCurrentUser(currentUser);
+        }
+    } catch (error) {
+        console.error(error);
     }
 }
 
@@ -132,26 +188,16 @@ function renderSessionActions(point) {
         return `
             <div class="cp-actions">
                 <button class="btn btn-outline btn-sm" onclick="bookChargingPoint(${point.charging_point_id})">Book</button>
-                <button class="btn btn-primary btn-sm" onclick="startChargingSession(${point.charging_point_id})">Start Session</button>
             </div>
         `;
     }
 
     if (status === 'Reserved' && ownsOpenSession) {
-        return `
-            <div class="cp-actions">
-                <button class="btn btn-primary btn-sm" onclick="startBookedChargingSession(${point.charging_point_id}, ${point.active_session_id})">Start Booked Session</button>
-            </div>
-        `;
+        return '<p class="cp-note">Booked for you. An administrator will start the charging session.</p>';
     }
 
     if (status === 'In Use' && ownsOpenSession) {
-        return `
-            <div class="cp-actions cp-end-session">
-                <input id="energy-${point.active_session_id}" type="number" min="0" step="0.1" class="form-control" placeholder="kWh used">
-                <button class="btn btn-danger btn-sm" onclick="endChargingSession(${point.active_session_id})">End Session</button>
-            </div>
-        `;
+        return '<p class="cp-note">Your session is active. An administrator will end it after charging.</p>';
     }
 
     if (status === 'Reserved') {
@@ -172,64 +218,14 @@ async function bookChargingPoint(chargingPointId) {
             showToast(result.error, 'error');
             return;
         }
+        if (result.session_id) {
+            watchedSessionIds.add(Number(result.session_id));
+        }
         showToast('Charging point booked', 'success');
         await loadStationDetail();
     } catch (error) {
         console.error(error);
         showToast('Failed to book charging point', 'error');
-    }
-}
-
-async function startChargingSession(chargingPointId) {
-    try {
-        const result = await api.startSession(currentUser.user_id, chargingPointId);
-        if (result.error) {
-            showToast(result.error, 'error');
-            return;
-        }
-        showToast('Charging session started', 'success');
-        await loadStationDetail();
-    } catch (error) {
-        console.error(error);
-        showToast('Failed to start session', 'error');
-    }
-}
-
-async function startBookedChargingSession(chargingPointId, sessionId) {
-    try {
-        const result = await api.startBookedSession(currentUser.user_id, chargingPointId, sessionId);
-        if (result.error) {
-            showToast(result.error, 'error');
-            return;
-        }
-        showToast('Booked session started', 'success');
-        await loadStationDetail();
-    } catch (error) {
-        console.error(error);
-        showToast('Failed to start booked session', 'error');
-    }
-}
-
-async function endChargingSession(sessionId) {
-    const input = document.getElementById(`energy-${sessionId}`);
-    const energyConsumed = input ? input.value : 0;
-
-    if (energyConsumed === '' || Number(energyConsumed) < 0) {
-        showToast('Enter valid kWh used', 'error');
-        return;
-    }
-
-    try {
-        const result = await api.endSession(sessionId, currentUser.user_id, energyConsumed);
-        if (result.error) {
-            showToast(result.error, 'error');
-            return;
-        }
-        showToast(`Session ended. Cost: ${formatCurrency(result.total_cost)}`, 'success');
-        await loadStationDetail();
-    } catch (error) {
-        console.error(error);
-        showToast('Failed to end session', 'error');
     }
 }
 

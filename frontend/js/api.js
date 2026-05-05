@@ -3,6 +3,10 @@
    ============================================================ */
 const API_BASE = `${window.location.origin}/api`;
 const AUTH_STORAGE_KEY = 'evfinder_current_user';
+const legacyUser = localStorage.getItem(AUTH_STORAGE_KEY);
+if (legacyUser && !sessionStorage.getItem(AUTH_STORAGE_KEY)) {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+}
 
 async function parseApiResponse(res, fallbackMessage) {
     const contentType = res.headers.get('content-type') || '';
@@ -24,11 +28,11 @@ async function parseApiResponse(res, fallbackMessage) {
 
 const api = {
     /* ---------- Auth ---------- */
-    async login(userId, password) {
+    async login(userId, password, role = 'user', adminStationId = null) {
         const res = await fetch(`${API_BASE}/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, password })
+            body: JSON.stringify({ user_id: userId, password, role, admin_station_id: adminStationId })
         });
         return parseApiResponse(res, 'Login failed on the server. Check the Flask terminal.');
     },
@@ -74,6 +78,15 @@ const api = {
         return res.json();
     },
 
+    async selectUserStation(userId, stationId) {
+        const res = await fetch(`${API_BASE}/users/${userId}/selected-station`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ station_id: stationId })
+        });
+        return parseApiResponse(res, 'Could not update selected station. Check the Flask terminal.');
+    },
+
     async getPeakHours(stationId) {
         const res = await fetch(`${API_BASE}/stations/${stationId}/peak-hours`);
         return res.json();
@@ -115,20 +128,20 @@ const api = {
     },
 
     /* ---------- Sessions ---------- */
-    async startSession(userId, chargingPointId) {
+    async startSession(userId, chargingPointId, adminUserId = null) {
         const res = await fetch(`${API_BASE}/session/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId })
+            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId, admin_user_id: adminUserId })
         });
         return parseApiResponse(res, 'Could not start session. Check the Flask terminal.');
     },
 
-    async startBookedSession(userId, chargingPointId, sessionId) {
+    async startBookedSession(userId, chargingPointId, sessionId, adminUserId = null) {
         const res = await fetch(`${API_BASE}/session/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId, session_id: sessionId })
+            body: JSON.stringify({ user_id: userId, charging_point_id: chargingPointId, session_id: sessionId, admin_user_id: adminUserId })
         });
         return parseApiResponse(res, 'Could not start booked session. Check the Flask terminal.');
     },
@@ -142,11 +155,11 @@ const api = {
         return parseApiResponse(res, 'Could not book charging point. Check the Flask terminal.');
     },
 
-    async endSession(sessionId, userId, energyConsumed) {
+    async endSession(sessionId, userId, energyConsumed, adminUserId = null) {
         const res = await fetch(`${API_BASE}/session/end`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: sessionId, user_id: userId, energy_consumed: energyConsumed })
+            body: JSON.stringify({ session_id: sessionId, user_id: userId, energy_consumed: energyConsumed, admin_user_id: adminUserId })
         });
         return parseApiResponse(res, 'Could not end session. Check the Flask terminal.');
     },
@@ -159,6 +172,12 @@ const api = {
     async getUserProfile(userId) {
         const res = await fetch(`${API_BASE}/users/${userId}/profile`);
         return res.json();
+    },
+
+    /* ---------- Admin ---------- */
+    async getAdminDashboard(adminUserId) {
+        const res = await fetch(`${API_BASE}/admin/dashboard?admin_user_id=${encodeURIComponent(adminUserId)}`);
+        return parseApiResponse(res, 'Could not load admin dashboard. Check the Flask terminal.');
     },
 
     /* ---------- Reviews ---------- */
@@ -188,18 +207,19 @@ const api = {
 };
 
 function setCurrentUser(user) {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+    sessionStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
 }
 
 function getCurrentUser() {
     try {
-        return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null');
+        return JSON.parse(sessionStorage.getItem(AUTH_STORAGE_KEY) || 'null');
     } catch {
         return null;
     }
 }
 
 function clearCurrentUser() {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
     localStorage.removeItem(AUTH_STORAGE_KEY);
 }
 
@@ -222,8 +242,33 @@ function requireAuth() {
 
 function redirectIfLoggedIn() {
     if (isLoggedIn()) {
-        window.location.href = 'index.html';
+        const user = getCurrentUser();
+        window.location.href = user?.role === 'admin' ? 'admin.html' : 'index.html';
     }
+}
+
+function requireAdmin() {
+    const user = requireAuth();
+    if (!user) return null;
+
+    if (user.role !== 'admin') {
+        window.location.href = 'index.html';
+        return null;
+    }
+
+    return user;
+}
+
+function requireUser() {
+    const user = requireAuth();
+    if (!user) return null;
+
+    if (user.role === 'admin') {
+        window.location.href = 'admin.html';
+        return null;
+    }
+
+    return user;
 }
 
 function enhanceNavbar(activePage) {
@@ -235,6 +280,23 @@ function enhanceNavbar(activePage) {
     if (existing) existing.remove();
 
     if (user) {
+        if (user.role === 'admin') {
+            links.querySelectorAll('a').forEach(link => {
+                const href = link.getAttribute('href');
+                if (['index.html', 'calculator.html', 'profile.html'].includes(href)) {
+                    link.closest('li')?.remove();
+                }
+            });
+        }
+
+        const hasAdminLink = Array.from(links.querySelectorAll('a')).some(link => link.getAttribute('href') === 'admin.html');
+        if (user.role === 'admin' && !hasAdminLink) {
+            const adminItem = document.createElement('li');
+            adminItem.id = 'navAdminItem';
+            adminItem.innerHTML = '<a href="admin.html">Admin</a>';
+            links.appendChild(adminItem);
+        }
+
         const item = document.createElement('li');
         item.id = 'navAuthItem';
         item.innerHTML = `<a href="#" onclick="logout();return false;">↪ Logout (${user.first_name})</a>`;
@@ -242,7 +304,7 @@ function enhanceNavbar(activePage) {
     }
 
     links.querySelectorAll('a').forEach(link => link.classList.remove('active'));
-    const map = { map: 'index.html', calculator: 'calculator.html', profile: 'profile.html' };
+    const map = { map: 'index.html', calculator: 'calculator.html', profile: 'profile.html', admin: 'admin.html' };
     const activeHref = map[activePage];
     if (!activeHref) return;
     const activeLink = Array.from(links.querySelectorAll('a')).find(link => link.getAttribute('href') === activeHref);
@@ -305,6 +367,7 @@ function getNavbarHTML(activePage) {
             <li><a href="index.html" class="${activePage === 'map' ? 'active' : ''}">🗺️ Map</a></li>
             <li><a href="calculator.html" class="${activePage === 'calculator' ? 'active' : ''}">🔋 Calculator</a></li>
             <li><a href="profile.html" class="${activePage === 'profile' ? 'active' : ''}">👤 Profile</a></li>
+            ${getCurrentUser()?.role === 'admin' ? `<li><a href="admin.html" class="${activePage === 'admin' ? 'active' : ''}">Admin</a></li>` : ''}
         </ul>
     </nav>`;
 }

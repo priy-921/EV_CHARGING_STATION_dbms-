@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from db import get_db
+from db import get_db, ensure_user_station_columns
 import hashlib
 
 users_bp = Blueprint('users', __name__)
@@ -19,6 +19,31 @@ def mask_password(password):
     if not password:
         return ''
     return '*' * max(8, min(len(password), 16))
+
+
+def as_int_or_none(value):
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def station_exists(cur, station_id):
+    cur.execute("SELECT station_id FROM ChargingStation WHERE station_id = %s LIMIT 1", (station_id,))
+    return cur.fetchone() is not None
+
+
+def admin_station_is_available(cur, station_id, user_id=None):
+    cur.execute("""
+        SELECT user_id
+        FROM `User`
+        WHERE admin_station_id = %s
+          AND (%s IS NULL OR user_id <> %s)
+        LIMIT 1
+    """, (station_id, user_id, user_id))
+    return cur.fetchone() is None
 
 
 def ensure_auth_tables():
@@ -106,10 +131,12 @@ def serialize_user(user):
         'last_name': user['last_name'],
         'email': user['email'],
         'phone': user['phone'],
-        'role': user.get('role', 'user'),
+        'role': user.get('role') or 'user',
         'last_lat': float(user['last_lat']) if user.get('last_lat') is not None else None,
         'last_lng': float(user['last_lng']) if user.get('last_lng') is not None else None,
         'last_location_updated': user['last_location_updated'].isoformat() if user.get('last_location_updated') else None,
+        'admin_station_id': user.get('admin_station_id'),
+        'selected_station_id': user.get('selected_station_id'),
         'masked_password': mask_password(user.get('password'))
     }
 
@@ -122,12 +149,32 @@ def signup():
     email = (data.get('email') or '').strip()
     phone = (data.get('phone') or '').strip()
     password = data.get('password') or ''
+    role = (data.get('role') or 'user').strip().lower()
+    admin_station_id = as_int_or_none(data.get('admin_station_id'))
 
     if not all([first_name, last_name, email, phone, password]):
         return jsonify({'error': 'All signup fields are required'}), 400
 
+    if role not in ('user', 'admin'):
+        return jsonify({'error': 'Choose either user or administrator role'}), 400
+
+    if role == 'admin' and not admin_station_id:
+        return jsonify({'error': 'Choose the station this administrator manages'}), 400
+
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
+
+    if role == 'admin':
+        if not station_exists(cur, admin_station_id):
+            cur.close()
+            conn.close()
+            return jsonify({'error': 'Selected station does not exist'}), 404
+        if not admin_station_is_available(cur, admin_station_id):
+            cur.close()
+            conn.close()
+            return jsonify({'error': 'This station already has an administrator'}), 409
+
     cur.execute("SELECT user_id FROM `User` WHERE email = %s OR phone = %s LIMIT 1", (email, phone))
     existing_user = cur.fetchone()
     if existing_user:
@@ -140,14 +187,15 @@ def signup():
 
     cur.execute("""
         INSERT INTO `User` (
-            user_id, first_name, last_name, email, phone, password
+            user_id, first_name, last_name, email, phone, password, role, admin_station_id
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
-    """, (next_user_id, first_name, last_name, email, phone, hash_password(password)))
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (next_user_id, first_name, last_name, email, phone, hash_password(password), role, admin_station_id if role == 'admin' else None))
     conn.commit()
 
     cur.execute("""
-        SELECT user_id, first_name, last_name, email, phone, password
+        SELECT user_id, first_name, last_name, email, phone, password, role,
+               last_lat, last_lng, last_location_updated, admin_station_id, selected_station_id
         FROM `User`
         WHERE user_id = %s
     """, (next_user_id,))
@@ -164,27 +212,69 @@ def login():
     data = request.get_json() or {}
     user_id = data.get('user_id')
     password = data.get('password') or ''
+    requested_role = (data.get('role') or '').strip().lower()
+    requested_station_id = as_int_or_none(data.get('admin_station_id'))
 
     if user_id in (None, '') or not password:
         return jsonify({'error': 'User ID and password are required'}), 400
 
+    if requested_role and requested_role not in ('user', 'admin'):
+        return jsonify({'error': 'Choose either user or administrator role'}), 400
+
+    if requested_role == 'admin' and not requested_station_id:
+        return jsonify({'error': 'Choose the station this administrator manages'}), 400
+
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT user_id, first_name, last_name, email, phone, password
+        SELECT user_id, first_name, last_name, email, phone, password, role,
+               last_lat, last_lng, last_location_updated, admin_station_id, selected_station_id
         FROM `User`
         WHERE user_id = %s
         LIMIT 1
     """, (user_id,))
     user = cur.fetchone()
-    cur.close()
-    conn.close()
 
     if not user or not password_matches(user.get('password'), password):
         record_login_attempt(int(user_id), False, user['user_id'] if user else None)
+        cur.close()
+        conn.close()
         return jsonify({'error': 'Invalid user ID or password'}), 401
 
+    actual_role = (user.get('role') or 'user').lower()
+    if requested_role and requested_role != actual_role:
+        record_login_attempt(int(user_id), False, user['user_id'])
+        cur.close()
+        conn.close()
+        return jsonify({'error': f'This account is registered as {actual_role}. Choose the correct role.'}), 403
+
+    if actual_role == 'admin':
+        if not station_exists(cur, requested_station_id):
+            cur.close()
+            conn.close()
+            return jsonify({'error': 'Selected station does not exist'}), 404
+
+        assigned_station_id = user.get('admin_station_id')
+        if assigned_station_id and int(assigned_station_id) != requested_station_id:
+            record_login_attempt(int(user_id), False, user['user_id'])
+            cur.close()
+            conn.close()
+            return jsonify({'error': 'This administrator is assigned to a different station'}), 403
+
+        if not assigned_station_id:
+            if not admin_station_is_available(cur, requested_station_id, user['user_id']):
+                record_login_attempt(int(user_id), False, user['user_id'])
+                cur.close()
+                conn.close()
+                return jsonify({'error': 'This station already has an administrator'}), 409
+            cur.execute("UPDATE `User` SET admin_station_id = %s WHERE user_id = %s", (requested_station_id, user['user_id']))
+            conn.commit()
+            user['admin_station_id'] = requested_station_id
+
     record_login_attempt(int(user_id), True, user['user_id'])
+    cur.close()
+    conn.close()
 
     return jsonify({'message': 'Login successful', 'user': serialize_user(user)})
 
@@ -224,11 +314,13 @@ def reset_password():
 
 @users_bp.route('/api/users/<int:user_id>/profile', methods=['GET'])
 def get_user_profile(user_id):
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT user_id, first_name, last_name, email, phone, password
+        SELECT user_id, first_name, last_name, email, phone, password, role,
+               last_lat, last_lng, last_location_updated, admin_station_id, selected_station_id
         FROM `User`
         WHERE user_id = %s
         LIMIT 1
@@ -267,3 +359,45 @@ def get_user_profile(user_id):
         'user': serialize_user(user),
         'vehicles': serialized_vehicles
     })
+
+
+@users_bp.route('/api/users/<int:user_id>/selected-station', methods=['POST'])
+def select_station(user_id):
+    data = request.get_json() or {}
+    station_id = as_int_or_none(data.get('station_id'))
+
+    if not station_id:
+        return jsonify({'error': 'Station ID is required'}), 400
+
+    ensure_user_station_columns()
+    conn = get_db()
+    cur = conn.cursor()
+
+    if not station_exists(cur, station_id):
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Selected station does not exist'}), 404
+
+    cur.execute("""
+        SELECT user_id, role
+        FROM `User`
+        WHERE user_id = %s
+        LIMIT 1
+    """, (user_id,))
+    user = cur.fetchone()
+    if not user:
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'User not found'}), 404
+
+    if (user.get('role') or 'user').lower() == 'admin':
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Administrators do not select user stations'}), 403
+
+    cur.execute("UPDATE `User` SET selected_station_id = %s WHERE user_id = %s", (station_id, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({'message': 'Selected station updated', 'station_id': station_id})

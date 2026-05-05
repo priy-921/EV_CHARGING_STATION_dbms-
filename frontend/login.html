@@ -38,6 +38,25 @@
                     <label class="form-label">Password</label>
                     <input id="loginPassword" type="password" class="form-control" placeholder="Enter your password" required>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Role</label>
+                    <div class="role-toggle" role="radiogroup" aria-label="Choose account role">
+                        <label class="role-option">
+                            <input type="radio" name="loginRole" value="user" checked>
+                            <span>User</span>
+                        </label>
+                        <label class="role-option">
+                            <input type="radio" name="loginRole" value="admin">
+                            <span>Administrator</span>
+                        </label>
+                    </div>
+                </div>
+                <div id="loginAdminStationGroup" class="form-group hidden">
+                    <label class="form-label">Station Managed</label>
+                    <select id="loginAdminStation" class="form-control">
+                        <option value="">Select station</option>
+                    </select>
+                </div>
                 <a href="#" class="auth-link" onclick="switchAuthMode('reset');return false;">Forgot password?</a>
                 <button class="btn btn-primary btn-lg auth-submit" type="submit">Login to EVFinder</button>
             </form>
@@ -63,6 +82,25 @@
                 <div class="form-group">
                     <label class="form-label">Password</label>
                     <input id="signupPassword" type="password" class="form-control" placeholder="Create a password" minlength="6" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Role</label>
+                    <div class="role-toggle" role="radiogroup" aria-label="Choose signup role">
+                        <label class="role-option">
+                            <input type="radio" name="signupRole" value="user" checked>
+                            <span>User</span>
+                        </label>
+                        <label class="role-option">
+                            <input type="radio" name="signupRole" value="admin">
+                            <span>Administrator</span>
+                        </label>
+                    </div>
+                </div>
+                <div id="signupAdminStationGroup" class="form-group hidden">
+                    <label class="form-label">Station Managed</label>
+                    <select id="signupAdminStation" class="form-control">
+                        <option value="">Select station</option>
+                    </select>
                 </div>
                 <button class="btn btn-primary btn-lg auth-submit" type="submit">Create Account</button>
             </form>
