@@ -174,6 +174,20 @@ const api = {
         return res.json();
     },
 
+    async getUnreadNotifications(userId) {
+        const res = await fetch(`${API_BASE}/users/${userId}/notifications/unread`);
+        return parseApiResponse(res, 'Could not load notifications. Check the Flask terminal.');
+    },
+
+    async markNotificationsRead(userId, notificationIds) {
+        const res = await fetch(`${API_BASE}/users/${userId}/notifications/read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notification_ids: notificationIds })
+        });
+        return parseApiResponse(res, 'Could not update notifications. Check the Flask terminal.');
+    },
+
     /* ---------- Admin ---------- */
     async getAdminDashboard(adminUserId) {
         const res = await fetch(`${API_BASE}/admin/dashboard?admin_user_id=${encodeURIComponent(adminUserId)}`);
@@ -268,7 +282,48 @@ function requireUser() {
         return null;
     }
 
+    startUserNotificationPolling(user);
     return user;
+}
+
+let userNotificationPollId = null;
+let userNotificationPollInFlight = false;
+
+function startUserNotificationPolling(user) {
+    if (!user || user.role === 'admin' || userNotificationPollId) return;
+
+    pollUserNotifications(user);
+    userNotificationPollId = setInterval(() => pollUserNotifications(getCurrentUser()), 5000);
+}
+
+async function pollUserNotifications(user) {
+    if (!user || user.role === 'admin' || userNotificationPollInFlight) return;
+
+    userNotificationPollInFlight = true;
+    try {
+        const notifications = await api.getUnreadNotifications(user.user_id);
+        if (!Array.isArray(notifications) || !notifications.length) return;
+
+        notifications.forEach(notification => {
+            if (notification.notification_type === 'session_ended') {
+                showPaperBill(notification);
+            } else {
+                showToast(notification.message, 'success');
+            }
+        });
+        window.dispatchEvent(new CustomEvent('evfinder:user-notifications', {
+            detail: { notifications }
+        }));
+
+        await api.markNotificationsRead(
+            user.user_id,
+            notifications.map(notification => notification.notification_id)
+        );
+    } catch (error) {
+        console.error(error);
+    } finally {
+        userNotificationPollInFlight = false;
+    }
 }
 
 function enhanceNavbar(activePage) {
@@ -297,6 +352,14 @@ function enhanceNavbar(activePage) {
             links.appendChild(adminItem);
         }
 
+        const hasAdminProfileLink = Array.from(links.querySelectorAll('a')).some(link => link.getAttribute('href') === 'admin-profile.html');
+        if (user.role === 'admin' && !hasAdminProfileLink) {
+            const profileItem = document.createElement('li');
+            profileItem.id = 'navAdminProfileItem';
+            profileItem.innerHTML = '<a href="admin-profile.html">Profile</a>';
+            links.appendChild(profileItem);
+        }
+
         const item = document.createElement('li');
         item.id = 'navAuthItem';
         item.innerHTML = `<a href="#" onclick="logout();return false;">↪ Logout (${user.first_name})</a>`;
@@ -304,7 +367,7 @@ function enhanceNavbar(activePage) {
     }
 
     links.querySelectorAll('a').forEach(link => link.classList.remove('active'));
-    const map = { map: 'index.html', calculator: 'calculator.html', profile: 'profile.html', admin: 'admin.html' };
+    const map = { map: 'index.html', calculator: 'calculator.html', profile: 'profile.html', admin: 'admin.html', adminProfile: 'admin-profile.html' };
     const activeHref = map[activePage];
     if (!activeHref) return;
     const activeLink = Array.from(links.querySelectorAll('a')).find(link => link.getAttribute('href') === activeHref);
@@ -312,20 +375,170 @@ function enhanceNavbar(activePage) {
 }
 
 /* ---------- Utility ---------- */
+const toastQueue = [];
+let toastActive = false;
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
 function showToast(message, type = '') {
-    const existing = document.querySelector('.toast');
-    if (existing) existing.remove();
+    toastQueue.push({ message, type });
+    if (toastActive) return;
+    showNextToast();
+}
+
+function showNextToast() {
+    const nextToast = toastQueue.shift();
+    if (!nextToast) {
+        toastActive = false;
+        return;
+    }
+
+    toastActive = true;
 
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
+    toast.className = `toast ${nextToast.type}`;
+    toast.textContent = nextToast.message;
     document.body.appendChild(toast);
 
     requestAnimationFrame(() => toast.classList.add('show'));
     setTimeout(() => {
         toast.classList.remove('show');
-        setTimeout(() => toast.remove(), 300);
+        setTimeout(() => {
+            toast.remove();
+            showNextToast();
+        }, 300);
     }, 3000);
+}
+
+function showPaperBill(notification) {
+    document.querySelector('.bill-overlay')?.remove();
+
+    const stationAddress = [
+        notification.street,
+        notification.city,
+        notification.state,
+        notification.zip
+    ].filter(Boolean).join(', ');
+    const customerName = [notification.first_name, notification.last_name].filter(Boolean).join(' ') || `User #${notification.user_id}`;
+    const energy = Number(notification.energy_consumed || 0);
+    const unitPrice = Number(notification.price || 0);
+    const subtotal = energy * unitPrice;
+    const total = Number(notification.total_cost ?? notification.billing_amount ?? subtotal);
+    const generatedAt = notification.created_at ? new Date(notification.created_at) : new Date();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bill-overlay';
+    overlay.innerHTML = `
+        <div class="bill-modal" role="dialog" aria-modal="true" aria-label="Charging bill">
+            <div id="printableBill" class="paper-bill">
+                <div class="bill-topline">
+                    <div>
+                        <div class="bill-brand">EVFinder</div>
+                        <div class="bill-subtitle">Charging Receipt</div>
+                    </div>
+                    <div class="bill-status">Paid</div>
+                </div>
+
+                <div class="bill-meta-grid">
+                    <div>
+                        <span>Bill No.</span>
+                        <strong>EV-${escapeHtml(notification.session_id || notification.notification_id)}</strong>
+                    </div>
+                    <div>
+                        <span>Date</span>
+                        <strong>${escapeHtml(generatedAt.toLocaleString('en-IN'))}</strong>
+                    </div>
+                    <div>
+                        <span>Session</span>
+                        <strong>#${escapeHtml(notification.session_id || '-')}</strong>
+                    </div>
+                    <div>
+                        <span>Point</span>
+                        <strong>#${escapeHtml(notification.charging_point_id || '-')}</strong>
+                    </div>
+                </div>
+
+                <div class="bill-parties">
+                    <div>
+                        <span>Billed To</span>
+                        <strong>${escapeHtml(customerName)}</strong>
+                        <p>${escapeHtml(notification.email || '')}</p>
+                        <p>${escapeHtml(notification.phone || '')}</p>
+                    </div>
+                    <div>
+                        <span>Station</span>
+                        <strong>${escapeHtml(notification.station_name || `Station #${notification.station_id || '-'}`)}</strong>
+                        <p>${escapeHtml(stationAddress || 'Address not available')}</p>
+                    </div>
+                </div>
+
+                <table class="bill-table">
+                    <thead>
+                        <tr>
+                            <th>Description</th>
+                            <th>Qty</th>
+                            <th>Rate</th>
+                            <th>Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                EV charging session
+                                <small>${escapeHtml(formatDateTimeRange(notification.start_time, notification.end_time))}</small>
+                            </td>
+                            <td>${energy.toFixed(2)} kWh</td>
+                            <td>${formatCurrency(unitPrice)}/kWh</td>
+                            <td>${formatCurrency(subtotal)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="bill-summary">
+                    <div><span>Energy Delivered</span><strong>${energy.toFixed(2)} kWh</strong></div>
+                    <div><span>Duration</span><strong>${notification.duration_minutes || 0} min</strong></div>
+                    <div class="bill-total"><span>Total Amount</span><strong>${formatCurrency(total)}</strong></div>
+                </div>
+
+                <div class="bill-footer">
+                    <p>Thank you for charging with EVFinder.</p>
+                    <p>This is a computer-generated bill for your completed charging session.</p>
+                </div>
+            </div>
+
+            <div class="bill-actions">
+                <button class="btn btn-outline" type="button" id="billCloseBtn">Close</button>
+                <button class="btn btn-primary" type="button" id="billPrintBtn">Print Bill</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.classList.add('bill-open');
+
+    overlay.querySelector('#billCloseBtn').addEventListener('click', closePaperBill);
+    overlay.querySelector('#billPrintBtn').addEventListener('click', () => window.print());
+    overlay.addEventListener('click', event => {
+        if (event.target === overlay) closePaperBill();
+    });
+}
+
+function closePaperBill() {
+    document.querySelector('.bill-overlay')?.remove();
+    document.body.classList.remove('bill-open');
+}
+
+function formatDateTimeRange(startTime, endTime) {
+    const start = startTime ? new Date(startTime).toLocaleString('en-IN') : '-';
+    const end = endTime ? new Date(endTime).toLocaleString('en-IN') : '-';
+    return `${start} to ${end}`;
 }
 
 function renderStars(rating) {

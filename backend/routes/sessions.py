@@ -29,29 +29,74 @@ def get_next_session_id(cur):
     return cur.fetchone()['next_session_id']
 
 
-def get_admin_station_id(cur, user_id):
+def create_user_notification(cur, user_id, session_id, notification_type, message, billing_amount=None):
+    cur.execute("""
+        INSERT INTO UserNotification (user_id, session_id, notification_type, message, billing_amount)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (user_id, session_id, notification_type, message, billing_amount))
+
+
+def get_session_notification_context(cur, session_id):
+    cur.execute("""
+        SELECT cs.session_id, cs.user_id, cp.charging_point_id,
+               s.name AS station_name, s.street, s.city
+        FROM ChargingSession cs
+        JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
+        JOIN ChargingStation s ON cp.station_id = s.station_id
+        WHERE cs.session_id = %s
+        LIMIT 1
+    """, (session_id,))
+    return cur.fetchone()
+
+
+def build_station_label(row):
+    if not row:
+        return 'your charging station'
+    station_name = row.get('station_name')
+    if station_name:
+        return station_name
+    return build_station_name(row)
+
+
+def get_admin_station_ids(cur, user_id):
     if user_id in (None, ''):
-        return None
+        return []
 
     cur.execute("""
-        SELECT role, admin_station_id
+        SELECT user_id, role, admin_station_id
         FROM `User`
         WHERE user_id = %s
         LIMIT 1
     """, (user_id,))
     user = cur.fetchone()
     if not user or (user.get('role') or '').lower() != 'admin':
-        return None
-    return user.get('admin_station_id')
+        return []
+
+    cur.execute("""
+        SELECT admin_station_id
+        FROM AdminData
+        WHERE admin_user_id = %s
+          AND admin_station_id IS NOT NULL
+        LIMIT 1
+    """, (user['user_id'],))
+    row = cur.fetchone()
+    station_ids = [row['admin_station_id']] if row else []
+    fallback_station_id = user.get('admin_station_id')
+    if fallback_station_id and fallback_station_id not in station_ids:
+        station_ids.append(fallback_station_id)
+    return station_ids
 
 
-def charging_point_belongs_to_station(cur, charging_point_id, station_id):
+def charging_point_belongs_to_stations(cur, charging_point_id, station_ids):
+    if not station_ids:
+        return False
+    placeholders = ', '.join(['%s'] * len(station_ids))
     cur.execute("""
         SELECT charging_point_id
         FROM ChargingPoint
-        WHERE charging_point_id = %s AND station_id = %s
+        WHERE charging_point_id = %s AND station_id IN ({0})
         LIMIT 1
-    """, (charging_point_id, station_id))
+    """.format(placeholders), (charging_point_id, *station_ids))
     return cur.fetchone() is not None
 
 
@@ -130,14 +175,14 @@ def start_session():
     conn = get_db()
     cur = conn.cursor()
 
-    admin_station_id = get_admin_station_id(cur, admin_user_id)
-    if not admin_station_id:
+    admin_station_ids = get_admin_station_ids(cur, admin_user_id)
+    if not admin_station_ids:
         cur.close(); conn.close()
         return jsonify({'error': 'Only administrators can start charging sessions'}), 403
 
-    if not charging_point_belongs_to_station(cur, charging_point_id, admin_station_id):
+    if not charging_point_belongs_to_stations(cur, charging_point_id, admin_station_ids):
         cur.close(); conn.close()
-        return jsonify({'error': 'Administrators can only manage their assigned station'}), 403
+        return jsonify({'error': 'Administrators can only manage their assigned stations'}), 403
 
     in_use_status_id = get_status_id(cur, 'In Use', 2)
 
@@ -160,6 +205,16 @@ def start_session():
             return jsonify({'error': 'This session is already completed'}), 400
 
         cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
+        context = get_session_notification_context(cur, session_id)
+        station_label = build_station_label(context)
+        point_label = context.get('charging_point_id') if context else charging_point_id
+        create_user_notification(
+            cur,
+            user_id,
+            session_id,
+            'session_started',
+            f'Your charging session #{int(session_id)} has started at {station_label} on point #{point_label}.'
+        )
         conn.commit()
         cur.close()
         conn.close()
@@ -197,6 +252,16 @@ def start_session():
     """, (session_id, charging_point_id, user_id))
 
     cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
+    context = get_session_notification_context(cur, session_id)
+    station_label = build_station_label(context)
+    point_label = context.get('charging_point_id') if context else charging_point_id
+    create_user_notification(
+        cur,
+        user_id,
+        session_id,
+        'session_started',
+        f'Your charging session #{session_id} has started at {station_label} on point #{point_label}.'
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -282,8 +347,8 @@ def end_session():
     conn = get_db()
     cur = conn.cursor()
 
-    admin_station_id = get_admin_station_id(cur, admin_user_id)
-    if not admin_station_id:
+    admin_station_ids = get_admin_station_ids(cur, admin_user_id)
+    if not admin_station_ids:
         cur.close(); conn.close()
         return jsonify({'error': 'Only administrators can end charging sessions'}), 403
 
@@ -300,9 +365,9 @@ def end_session():
         cur.close(); conn.close()
         return jsonify({'error': 'Session not found'}), 404
 
-    if int(session['station_id']) != int(admin_station_id):
+    if int(session['station_id']) not in [int(station_id) for station_id in admin_station_ids]:
         cur.close(); conn.close()
-        return jsonify({'error': 'Administrators can only manage their assigned station'}), 403
+        return jsonify({'error': 'Administrators can only manage their assigned stations'}), 403
 
     if user_id not in (None, '') and int(session['user_id']) != int(user_id):
         cur.close(); conn.close()
@@ -323,6 +388,16 @@ def end_session():
 
     available_status_id = get_status_id(cur, 'Available', 1)
     cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (available_status_id, session['charging_point_id']))
+    context = get_session_notification_context(cur, session_id)
+    station_label = build_station_label(context)
+    create_user_notification(
+        cur,
+        session['user_id'],
+        session_id,
+        'session_ended',
+        f'Your charging session #{int(session_id)} has ended at {station_label}. Billing amount: ₹{total_cost:.2f}.',
+        total_cost
+    )
 
     conn.commit()
     cur.close()

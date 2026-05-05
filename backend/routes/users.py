@@ -21,6 +21,18 @@ def mask_password(password):
     return '*' * max(8, min(len(password), 16))
 
 
+def serialize_value(value):
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    if isinstance(value, (int, float, str, type(None), bool)):
+        return value
+    return float(value) if value is not None else None
+
+
+def serialize_row(row):
+    return {key: serialize_value(value) for key, value in row.items()}
+
+
 def as_int_or_none(value):
     if value in (None, ''):
         return None
@@ -43,7 +55,75 @@ def admin_station_is_available(cur, station_id, user_id=None):
           AND (%s IS NULL OR user_id <> %s)
         LIMIT 1
     """, (station_id, user_id, user_id))
+    if cur.fetchone():
+        return False
+
+    cur.execute("""
+        SELECT admin_user_id
+        FROM AdminData
+        WHERE admin_station_id = %s
+          AND (%s IS NULL OR admin_user_id <> %s)
+        LIMIT 1
+    """, (station_id, user_id, user_id))
     return cur.fetchone() is None
+
+
+def sync_account_data(cur, user_id):
+    cur.execute("""
+        SELECT role
+        FROM `User`
+        WHERE user_id = %s
+        LIMIT 1
+    """, (user_id,))
+    user = cur.fetchone()
+    if not user:
+        return
+
+    if (user.get('role') or 'user').lower() == 'admin':
+        cur.execute("""
+            INSERT INTO AdminData (
+                admin_user_id, first_name, last_name, email, phone, password,
+                admin_station_id, last_lat, last_lng, last_location_updated
+            )
+            SELECT user_id, first_name, last_name, email, phone, password,
+                   admin_station_id, last_lat, last_lng, last_location_updated
+            FROM `User`
+            WHERE user_id = %s
+            ON DUPLICATE KEY UPDATE
+                first_name = VALUES(first_name),
+                last_name = VALUES(last_name),
+                email = VALUES(email),
+                phone = VALUES(phone),
+                password = VALUES(password),
+                admin_station_id = VALUES(admin_station_id),
+                last_lat = VALUES(last_lat),
+                last_lng = VALUES(last_lng),
+                last_location_updated = VALUES(last_location_updated)
+        """, (user_id,))
+        cur.execute("DELETE FROM UserData WHERE user_id = %s", (user_id,))
+        return
+
+    cur.execute("""
+        INSERT INTO UserData (
+            user_id, first_name, last_name, email, phone, password,
+            last_lat, last_lng, last_location_updated, selected_station_id
+        )
+        SELECT user_id, first_name, last_name, email, phone, password,
+               last_lat, last_lng, last_location_updated, selected_station_id
+        FROM `User`
+        WHERE user_id = %s
+        ON DUPLICATE KEY UPDATE
+            first_name = VALUES(first_name),
+            last_name = VALUES(last_name),
+            email = VALUES(email),
+            phone = VALUES(phone),
+            password = VALUES(password),
+            last_lat = VALUES(last_lat),
+            last_lng = VALUES(last_lng),
+            last_location_updated = VALUES(last_location_updated),
+            selected_station_id = VALUES(selected_station_id)
+    """, (user_id,))
+    cur.execute("DELETE FROM AdminData WHERE admin_user_id = %s", (user_id,))
 
 
 def ensure_auth_tables():
@@ -125,6 +205,7 @@ def record_signup(user_id, email):
 
 
 def serialize_user(user):
+    admin_station_id = user.get('admin_station_id')
     return {
         'user_id': user['user_id'],
         'first_name': user['first_name'],
@@ -135,7 +216,8 @@ def serialize_user(user):
         'last_lat': float(user['last_lat']) if user.get('last_lat') is not None else None,
         'last_lng': float(user['last_lng']) if user.get('last_lng') is not None else None,
         'last_location_updated': user['last_location_updated'].isoformat() if user.get('last_location_updated') else None,
-        'admin_station_id': user.get('admin_station_id'),
+        'admin_station_id': admin_station_id,
+        'admin_station_ids': [admin_station_id] if admin_station_id else [],
         'selected_station_id': user.get('selected_station_id'),
         'masked_password': mask_password(user.get('password'))
     }
@@ -191,6 +273,7 @@ def signup():
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """, (next_user_id, first_name, last_name, email, phone, hash_password(password), role, admin_station_id if role == 'admin' else None))
+    sync_account_data(cur, next_user_id)
     conn.commit()
 
     cur.execute("""
@@ -269,8 +352,9 @@ def login():
                 conn.close()
                 return jsonify({'error': 'This station already has an administrator'}), 409
             cur.execute("UPDATE `User` SET admin_station_id = %s WHERE user_id = %s", (requested_station_id, user['user_id']))
-            conn.commit()
             user['admin_station_id'] = requested_station_id
+        sync_account_data(cur, user['user_id'])
+        conn.commit()
 
     record_login_attempt(int(user_id), True, user['user_id'])
     cur.close()
@@ -289,6 +373,7 @@ def reset_password():
     if user_id in (None, '') or not email or not new_password:
         return jsonify({'error': 'User ID, email, and new password are required'}), 400
 
+    ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
@@ -304,6 +389,7 @@ def reset_password():
         return jsonify({'error': 'No account found for this user ID and email'}), 404
 
     cur.execute("UPDATE `User` SET password = %s WHERE user_id = %s", (hash_password(new_password), user['user_id']))
+    sync_account_data(cur, user['user_id'])
     conn.commit()
     cur.close()
     conn.close()
@@ -396,8 +482,66 @@ def select_station(user_id):
         return jsonify({'error': 'Administrators do not select user stations'}), 403
 
     cur.execute("UPDATE `User` SET selected_station_id = %s WHERE user_id = %s", (station_id, user_id))
+    sync_account_data(cur, user_id)
     conn.commit()
     cur.close()
     conn.close()
 
     return jsonify({'message': 'Selected station updated', 'station_id': station_id})
+
+
+@users_bp.route('/api/users/<int:user_id>/notifications/unread', methods=['GET'])
+def get_unread_notifications(user_id):
+    ensure_user_station_columns()
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT un.notification_id, un.user_id, un.session_id, un.notification_type, un.message,
+               un.billing_amount, un.is_read, un.created_at,
+               cs.start_time, cs.end_time, cs.energy_consumed, cs.total_cost,
+               TIMESTAMPDIFF(MINUTE, cs.start_time, cs.end_time) AS duration_minutes,
+               cp.charging_point_id, cp.power_rating, cp.price,
+               s.station_id, s.name AS station_name, s.street, s.city, s.state, s.zip,
+               u.first_name, u.last_name, u.email, u.phone
+        FROM UserNotification un
+        LEFT JOIN ChargingSession cs ON un.session_id = cs.session_id
+        LEFT JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
+        LEFT JOIN ChargingStation s ON cp.station_id = s.station_id
+        LEFT JOIN `User` u ON un.user_id = u.user_id
+        WHERE un.user_id = %s AND un.is_read = 0
+        ORDER BY un.created_at ASC
+        LIMIT 10
+    """, (user_id,))
+    notifications = [serialize_row(row) for row in cur.fetchall()]
+
+    cur.close()
+    conn.close()
+    return jsonify(notifications)
+
+
+@users_bp.route('/api/users/<int:user_id>/notifications/read', methods=['POST'])
+def mark_notifications_read(user_id):
+    data = request.get_json() or {}
+    notification_ids = data.get('notification_ids') or []
+
+    notification_ids = [as_int_or_none(notification_id) for notification_id in notification_ids]
+    notification_ids = [notification_id for notification_id in notification_ids if notification_id]
+
+    if not notification_ids:
+        return jsonify({'message': 'No notifications to mark'})
+
+    ensure_user_station_columns()
+    conn = get_db()
+    cur = conn.cursor()
+    placeholders = ', '.join(['%s'] * len(notification_ids))
+    cur.execute(f"""
+        UPDATE UserNotification
+        SET is_read = 1
+        WHERE user_id = %s AND notification_id IN ({placeholders})
+    """, (user_id, *notification_ids))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({'message': 'Notifications marked as read'})

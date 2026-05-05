@@ -33,6 +33,22 @@ def get_admin_user(cur):
     return user
 
 
+def get_admin_station_ids(cur, admin_user):
+    cur.execute("""
+        SELECT admin_station_id
+        FROM AdminData
+        WHERE admin_user_id = %s
+          AND admin_station_id IS NOT NULL
+        LIMIT 1
+    """, (admin_user['user_id'],))
+    row = cur.fetchone()
+    station_ids = [row['admin_station_id']] if row else []
+    fallback_station_id = admin_user.get('admin_station_id')
+    if fallback_station_id and fallback_station_id not in station_ids:
+        station_ids.append(fallback_station_id)
+    return station_ids
+
+
 @admin_bp.route('/api/admin/dashboard', methods=['GET'])
 def get_admin_dashboard():
     ensure_user_station_columns()
@@ -45,11 +61,13 @@ def get_admin_dashboard():
         conn.close()
         return jsonify({'error': 'Administrator access is required'}), 403
 
-    admin_station_id = admin_user.get('admin_station_id')
-    if not admin_station_id:
+    admin_station_ids = get_admin_station_ids(cur, admin_user)
+    if not admin_station_ids:
         cur.close()
         conn.close()
         return jsonify({'error': 'This administrator is not assigned to a station'}), 403
+
+    station_placeholders = ', '.join(['%s'] * len(admin_station_ids))
 
     cur.execute("""
         SELECT DISTINCT u.user_id, u.first_name, u.last_name, u.email, u.phone, u.role,
@@ -58,12 +76,12 @@ def get_admin_dashboard():
         LEFT JOIN ChargingSession cs ON u.user_id = cs.user_id
         LEFT JOIN ChargingPoint cp ON cs.charging_point_id = cp.charging_point_id
         WHERE (u.role IS NULL OR LOWER(u.role) <> 'admin')
-          AND (u.selected_station_id = %s OR cp.station_id = %s)
+          AND (u.selected_station_id IN ({0}) OR cp.station_id IN ({0}))
         ORDER BY u.user_id
-    """, (admin_station_id, admin_station_id))
+    """.format(station_placeholders), (*admin_station_ids, *admin_station_ids))
     users = [serialize_row(row) for row in cur.fetchall()]
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT cs.session_id, cs.user_id, u.first_name, u.last_name, u.email, u.phone,
                cs.charging_point_id, cs.start_time, cs.end_time,
                cs.energy_consumed, cs.total_cost,
@@ -79,13 +97,13 @@ def get_admin_dashboard():
         LEFT JOIN ConnectorType ct ON cp.connector_type_id = ct.connector_type_id
         LEFT JOIN ChargerType cht ON cp.charger_type_id = cht.charger_type_id
         LEFT JOIN ChargingPointStatus cps ON cp.status_id = cps.status_id
-        WHERE s.station_id = %s
+        WHERE s.station_id IN ({station_placeholders})
         ORDER BY cs.start_time DESC
         LIMIT 500
-    """, (admin_station_id,))
+    """, admin_station_ids)
     sessions = [serialize_row(row) for row in cur.fetchall()]
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT s.station_id, s.name AS station_name, s.street, s.city, s.state, s.zip,
                s.latitude, s.longitude, s.contact,
                cp.charging_point_id, cp.power_rating, cp.price,
@@ -109,9 +127,9 @@ def get_admin_dashboard():
             JOIN `User` u ON cs.user_id = u.user_id
             WHERE cs.end_time IS NULL
         ) active ON cp.charging_point_id = active.charging_point_id
-        WHERE s.station_id = %s
+        WHERE s.station_id IN ({station_placeholders})
         ORDER BY s.station_id, cp.charging_point_id
-    """, (admin_station_id,))
+    """, admin_station_ids)
     station_rows = [serialize_row(row) for row in cur.fetchall()]
 
     stations_by_id = {}

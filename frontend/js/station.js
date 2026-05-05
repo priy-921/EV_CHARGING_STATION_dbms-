@@ -7,11 +7,6 @@ let stationData = null;
 let vehicles = [];
 let peakChart = null;
 let currentUser = null;
-let watchedSessionIds = new Set();
-let notifiedEndedSessionIds = new Set(
-    JSON.parse(sessionStorage.getItem('evfinder_notified_ended_sessions') || '[]')
-);
-let sessionWatcherId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     currentUser = requireUser();
@@ -28,56 +23,30 @@ document.addEventListener('DOMContentLoaded', () => {
     loadReviews();
     loadPeakHours();
     renderReviewUser();
-    sessionWatcherId = setInterval(checkWatchedSessions, 5000);
+    window.addEventListener('evfinder:user-notifications', handleSessionNotifications);
 });
+
+function handleSessionNotifications(event) {
+    const notifications = event.detail?.notifications || [];
+    const hasSessionUpdate = notifications.some(notification =>
+        ['session_started', 'session_ended'].includes(notification.notification_type)
+    );
+    if (hasSessionUpdate) {
+        loadStationDetail();
+    }
+}
 
 async function loadStationDetail() {
     try {
         const data = await api.getStationDetail(stationId);
         stationData = data;
         markSelectedStation();
-        watchCurrentUserSessions(data.charging_points || []);
         renderStationHeader(data.station);
         renderChargingPoints(data.charging_points);
         loadPrediction();
     } catch (e) {
         console.error(e);
         showToast('Failed to load station details', 'error');
-    }
-}
-
-function watchCurrentUserSessions(points) {
-    points.forEach(point => {
-        const ownsOpenSession = point.active_user_id && Number(point.active_user_id) === Number(currentUser.user_id);
-        if (ownsOpenSession && point.active_session_id) {
-            watchedSessionIds.add(Number(point.active_session_id));
-        }
-    });
-}
-
-function rememberEndedSession(sessionId) {
-    notifiedEndedSessionIds.add(Number(sessionId));
-    sessionStorage.setItem('evfinder_notified_ended_sessions', JSON.stringify([...notifiedEndedSessionIds]));
-}
-
-async function checkWatchedSessions() {
-    if (!currentUser || !watchedSessionIds.size) return;
-
-    try {
-        const sessions = await api.getUserSessions(currentUser.user_id);
-        const sessionMap = new Map((sessions || []).map(session => [Number(session.session_id), session]));
-
-        watchedSessionIds.forEach(sessionId => {
-            const session = sessionMap.get(Number(sessionId));
-            if (!session || !session.end_time || notifiedEndedSessionIds.has(Number(sessionId))) return;
-
-            rememberEndedSession(sessionId);
-            watchedSessionIds.delete(Number(sessionId));
-            showToast(`Your charging session has ended. Billing amount: ${formatCurrency(session.total_cost)}`, 'success');
-            loadStationDetail();
-        });
-    } catch (error) {
-        console.error(error);
     }
 }
 
@@ -217,9 +186,6 @@ async function bookChargingPoint(chargingPointId) {
         if (result.error) {
             showToast(result.error, 'error');
             return;
-        }
-        if (result.session_id) {
-            watchedSessionIds.add(Number(result.session_id));
         }
         showToast('Charging point booked', 'success');
         await loadStationDetail();
