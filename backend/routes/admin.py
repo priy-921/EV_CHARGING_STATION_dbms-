@@ -20,7 +20,7 @@ def get_admin_user(cur):
     admin_user_id = request.args.get('admin_user_id') or (request.get_json(silent=True) or {}).get('admin_user_id')
     if admin_user_id in (None, ''):
         return None
-
+    #fetches the users from user table
     cur.execute("""
         SELECT user_id, role, admin_station_id
         FROM `User` u
@@ -32,7 +32,7 @@ def get_admin_user(cur):
         return None
     return user
 
-
+#finds the charging station the admin is assigned to
 def get_admin_station_ids(cur, admin_user):
     cur.execute("""
         SELECT admin_station_id
@@ -68,7 +68,8 @@ def get_admin_dashboard():
         return jsonify({'error': 'This administrator is not assigned to a station'}), 403
 
     station_placeholders = ', '.join(['%s'] * len(admin_station_ids))
-
+#users related to admin station
+#left join is used to keep users even if they have no sessions existing
     cur.execute("""
         SELECT DISTINCT u.user_id, u.first_name, u.last_name, u.email, u.phone, u.role,
                u.selected_station_id
@@ -80,7 +81,7 @@ def get_admin_dashboard():
         ORDER BY u.user_id
     """.format(station_placeholders), (*admin_station_ids, *admin_station_ids))
     users = [serialize_row(row) for row in cur.fetchall()]
-
+#charging station history from admin stations
     cur.execute(f"""
         SELECT cs.session_id, cs.user_id, u.first_name, u.last_name, u.email, u.phone,
                cs.charging_point_id, cs.start_time, cs.end_time,
@@ -102,7 +103,7 @@ def get_admin_dashboard():
         LIMIT 500
     """, admin_station_ids)
     sessions = [serialize_row(row) for row in cur.fetchall()]
-
+#gives stations , their charging points and current active session if any
     cur.execute(f"""
         SELECT s.station_id, s.name AS station_name, s.street, s.city, s.state, s.zip,
                s.latitude, s.longitude, s.contact,
@@ -125,7 +126,7 @@ def get_admin_dashboard():
                    u.first_name, u.last_name
             FROM ChargingSession cs
             JOIN `User` u ON cs.user_id = u.user_id
-            WHERE cs.end_time IS NULL
+            WHERE cs.end_time IS NULL 
         ) active ON cp.charging_point_id = active.charging_point_id
         WHERE s.station_id IN ({station_placeholders})
         ORDER BY s.station_id, cp.charging_point_id

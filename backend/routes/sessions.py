@@ -12,7 +12,7 @@ def build_station_name(row):
     fallback_name = f"{locality} EV Charging Station" if locality else f"EV Charging Station #{row.get('station_id')}"
     return row.get('station_name') or fallback_name
 
-
+#gets status id of the charging point
 def get_status_id(cur, status_name, fallback_id):
     cur.execute("""
         SELECT status_id
@@ -23,19 +23,19 @@ def get_status_id(cur, status_name, fallback_id):
     status = cur.fetchone()
     return status['status_id'] if status else fallback_id
 
-
+#generates next session id, coalesce handles empty table, manual id generation
 def get_next_session_id(cur):
     cur.execute("SELECT COALESCE(MAX(session_id), 0) + 1 AS next_session_id FROM ChargingSession")
     return cur.fetchone()['next_session_id']
 
-
+#stores user notifications(session start/end alerts)
 def create_user_notification(cur, user_id, session_id, notification_type, message, billing_amount=None):
     cur.execute("""
         INSERT INTO UserNotification (user_id, session_id, notification_type, message, billing_amount)
         VALUES (%s, %s, %s, %s, %s)
     """, (user_id, session_id, notification_type, message, billing_amount))
 
-
+#fetches session+station details, used for building notification messages
 def get_session_notification_context(cur, session_id):
     cur.execute("""
         SELECT cs.session_id, cs.user_id, cp.charging_point_id,
@@ -61,7 +61,7 @@ def build_station_label(row):
 def get_admin_station_ids(cur, user_id):
     if user_id in (None, ''):
         return []
-
+#check if user if admin
     cur.execute("""
         SELECT user_id, role, admin_station_id
         FROM `User`
@@ -71,7 +71,7 @@ def get_admin_station_ids(cur, user_id):
     user = cur.fetchone()
     if not user or (user.get('role') or '').lower() != 'admin':
         return []
-
+#get station that admin manages
     cur.execute("""
         SELECT admin_station_id
         FROM AdminData
@@ -91,6 +91,7 @@ def charging_point_belongs_to_stations(cur, charging_point_id, station_ids):
     if not station_ids:
         return False
     placeholders = ', '.join(['%s'] * len(station_ids))
+   #validate charging point belongs to that station 
     cur.execute("""
         SELECT charging_point_id
         FROM ChargingPoint
@@ -110,13 +111,13 @@ def estimate_charge():
 
     conn = get_db()
     cur = conn.cursor()
-
+#vehicle details
     cur.execute("SELECT battery_capacity, max_ac_kw, max_dc_kw FROM Vehicle WHERE vehicle_id = %s", (vehicle_id,))
     vehicle = cur.fetchone()
     if not vehicle:
         cur.close(); conn.close()
         return jsonify({'error': 'Vehicle not found'}), 404
-
+#get charging point info
     cur.execute("""
         SELECT cp.power_rating, cp.price, cht.name AS charger_name
         FROM ChargingPoint cp
@@ -185,7 +186,7 @@ def start_session():
         return jsonify({'error': 'Administrators can only manage their assigned stations'}), 403
 
     in_use_status_id = get_status_id(cur, 'In Use', 2)
-
+#get session for start
     if session_id:
         cur.execute("""
             SELECT session_id, user_id, charging_point_id, end_time
@@ -203,7 +204,7 @@ def start_session():
         if session.get('end_time'):
             cur.close(); conn.close()
             return jsonify({'error': 'This session is already completed'}), 400
-
+#update charging point status(available,in use,reserved)
         cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
         context = get_session_notification_context(cur, session_id)
         station_label = build_station_label(context)
@@ -219,7 +220,7 @@ def start_session():
         cur.close()
         conn.close()
         return jsonify({'message': 'Booked session started', 'session_id': int(session_id)})
-
+#check availability of charging point
     cur.execute("""
         SELECT cp.charging_point_id, cps.status_name
         FROM ChargingPoint cp
@@ -234,7 +235,7 @@ def start_session():
     if point.get('status_name') != 'Available':
         cur.close(); conn.close()
         return jsonify({'error': 'Charging point is not available'}), 400
-
+#check active session if exists
     cur.execute("""
         SELECT session_id
         FROM ChargingSession
@@ -246,11 +247,12 @@ def start_session():
         return jsonify({'error': 'Charging point already has an active booking/session'}), 409
 
     session_id = get_next_session_id(cur)
+    #insert charging sessions to database
     cur.execute("""
         INSERT INTO ChargingSession (session_id, charging_point_id, user_id, start_time)
         VALUES (%s, %s, %s, NOW())
     """, (session_id, charging_point_id, user_id))
-
+    #update status of charging points
     cur.execute("UPDATE ChargingPoint SET status_id = %s WHERE charging_point_id = %s", (in_use_status_id, charging_point_id))
     context = get_session_notification_context(cur, session_id)
     station_label = build_station_label(context)
@@ -410,6 +412,8 @@ def end_session():
 def get_user_sessions(user_id):
     conn = get_db()
     cur = conn.cursor()
+    #get user sessions
+    #TIMESTAMPDIFF calculates session duration
     cur.execute("""
         SELECT cs.session_id, cs.start_time, cs.end_time, cs.energy_consumed, cs.total_cost,
                s.station_id, s.name AS station_name, s.street, s.city, cp.power_rating,

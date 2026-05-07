@@ -1,8 +1,10 @@
 from flask import Blueprint, request, jsonify
 from db import get_db, ensure_user_station_columns
 import hashlib
+import os
 
 users_bp = Blueprint('users', __name__)
+ADMIN_SIGNUP_CODE = os.getenv('EVFINDER_ADMIN_SIGNUP_CODE', 'EVFINDER-ADMIN-2026')
 
 
 def hash_password(password):
@@ -41,12 +43,12 @@ def as_int_or_none(value):
     except (TypeError, ValueError):
         return None
 
-
+#check if station exists
 def station_exists(cur, station_id):
     cur.execute("SELECT station_id FROM ChargingStation WHERE station_id = %s LIMIT 1", (station_id,))
     return cur.fetchone() is not None
 
-
+#check admin station availablity
 def admin_station_is_available(cur, station_id, user_id=None):
     cur.execute("""
         SELECT user_id
@@ -67,7 +69,7 @@ def admin_station_is_available(cur, station_id, user_id=None):
     """, (station_id, user_id, user_id))
     return cur.fetchone() is None
 
-
+#get user role
 def sync_account_data(cur, user_id):
     cur.execute("""
         SELECT role
@@ -125,7 +127,7 @@ def sync_account_data(cur, user_id):
     """, (user_id,))
     cur.execute("DELETE FROM AdminData WHERE admin_user_id = %s", (user_id,))
 
-
+#tracks the login attempts, password resets, signups
 def ensure_auth_tables():
     conn = get_db()
     cur = conn.cursor()
@@ -233,6 +235,7 @@ def signup():
     password = data.get('password') or ''
     role = (data.get('role') or 'user').strip().lower()
     admin_station_id = as_int_or_none(data.get('admin_station_id'))
+    admin_signup_code = (data.get('admin_signup_code') or '').strip()
 
     if not all([first_name, last_name, email, phone, password]):
         return jsonify({'error': 'All signup fields are required'}), 400
@@ -242,6 +245,9 @@ def signup():
 
     if role == 'admin' and not admin_station_id:
         return jsonify({'error': 'Choose the station this administrator manages'}), 400
+
+    if role == 'admin' and admin_signup_code != ADMIN_SIGNUP_CODE:
+        return jsonify({'error': 'Invalid administrator signup code'}), 403
 
     ensure_user_station_columns()
     conn = get_db()
@@ -256,14 +262,14 @@ def signup():
             cur.close()
             conn.close()
             return jsonify({'error': 'This station already has an administrator'}), 409
-
+#check existing user 
     cur.execute("SELECT user_id FROM `User` WHERE email = %s OR phone = %s LIMIT 1", (email, phone))
     existing_user = cur.fetchone()
     if existing_user:
         cur.close()
         conn.close()
         return jsonify({'error': 'A user with this email or phone already exists'}), 409
-
+#generates the next user id
     cur.execute("SELECT COALESCE(MAX(user_id), 0) + 1 AS next_user_id FROM `User`")
     next_user_id = cur.fetchone()['next_user_id']
 
@@ -275,7 +281,7 @@ def signup():
     """, (next_user_id, first_name, last_name, email, phone, hash_password(password), role, admin_station_id if role == 'admin' else None))
     sync_account_data(cur, next_user_id)
     conn.commit()
-
+#get user after signup / login
     cur.execute("""
         SELECT user_id, first_name, last_name, email, phone, password, role,
                last_lat, last_lng, last_location_updated, admin_station_id, selected_station_id
@@ -310,6 +316,7 @@ def login():
     ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
+    #login query
     cur.execute("""
         SELECT user_id, first_name, last_name, email, phone, password, role,
                last_lat, last_lng, last_location_updated, admin_station_id, selected_station_id
@@ -351,6 +358,7 @@ def login():
                 cur.close()
                 conn.close()
                 return jsonify({'error': 'This station already has an administrator'}), 409
+            #update admin station
             cur.execute("UPDATE `User` SET admin_station_id = %s WHERE user_id = %s", (requested_station_id, user['user_id']))
             user['admin_station_id'] = requested_station_id
         sync_account_data(cur, user['user_id'])
@@ -376,6 +384,7 @@ def reset_password():
     ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
+    #get user profile
     cur.execute("""
         SELECT user_id, first_name, last_name, email, phone
         FROM `User`
@@ -387,7 +396,7 @@ def reset_password():
         cur.close()
         conn.close()
         return jsonify({'error': 'No account found for this user ID and email'}), 404
-
+    #reset password
     cur.execute("UPDATE `User` SET password = %s WHERE user_id = %s", (hash_password(new_password), user['user_id']))
     sync_account_data(cur, user['user_id'])
     conn.commit()
@@ -417,7 +426,7 @@ def get_user_profile(user_id):
         cur.close()
         conn.close()
         return jsonify({'error': 'User not found'}), 404
-
+#get user vehicle
     cur.execute("""
         SELECT vehicle_id, model, brand, battery_capacity, max_ac_kw, max_dc_kw, segment
         FROM Vehicle
@@ -495,7 +504,7 @@ def get_unread_notifications(user_id):
     ensure_user_station_columns()
     conn = get_db()
     cur = conn.cursor()
-
+#get unread notifications with full details of charging session
     cur.execute("""
         SELECT un.notification_id, un.user_id, un.session_id, un.notification_type, un.message,
                un.billing_amount, un.is_read, un.created_at,

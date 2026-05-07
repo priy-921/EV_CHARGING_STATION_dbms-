@@ -31,6 +31,7 @@ def infer_connector_ids(vehicle):
 
 
 def ensure_vehicle_connectors(cur, vehicle):
+    #fetches all existing vehicle connectors
     cur.execute("SELECT connector_type_id FROM VehicleConnector WHERE vehicle_id = %s", (vehicle['vehicle_id'],))
     existing = [row['connector_type_id'] for row in cur.fetchall()]
     if existing:
@@ -39,7 +40,7 @@ def ensure_vehicle_connectors(cur, vehicle):
     connector_ids = infer_connector_ids(vehicle)
     if not connector_ids:
         return []
-
+    #insert vehicle connectors
     cur.executemany("""
         INSERT INTO VehicleConnector (vehicle_id, connector_type_id)
         VALUES (%s, %s)
@@ -51,6 +52,7 @@ def ensure_vehicle_connectors(cur, vehicle):
 def get_vehicles():
     conn = get_db()
     cur = conn.cursor()
+    #fetches all vehicles from the database
     cur.execute("""
         SELECT v.vehicle_id, v.user_id, v.model, v.brand, v.battery_capacity,
                v.max_ac_kw, v.max_dc_kw, v.segment
@@ -101,13 +103,13 @@ def create_vehicle():
 
     conn = get_db()
     cur = conn.cursor()
-
+#check if user exists
     cur.execute("SELECT user_id FROM `User` WHERE user_id = %s LIMIT 1", (user_id,))
     if not cur.fetchone():
         cur.close()
         conn.close()
         return jsonify({'error': 'User not found'}), 404
-
+#generate next vehicle id
     cur.execute("SELECT COALESCE(MAX(vehicle_id), 0) + 1 AS next_vehicle_id FROM Vehicle")
     next_vehicle_id = cur.fetchone()['next_vehicle_id']
 
@@ -121,7 +123,7 @@ def create_vehicle():
         'max_dc_kw': max_dc_kw,
     })
     conn.commit()
-
+#get vehicle info used to determine the connector types
     cur.execute("""
         SELECT vehicle_id, user_id, model, brand, battery_capacity, max_ac_kw, max_dc_kw, segment
         FROM Vehicle
@@ -152,7 +154,7 @@ def get_vehicle_connectors(vehicle_id):
 
     connector_ids = ensure_vehicle_connectors(cur, vehicle)
     conn.commit()
-
+#fetches connector names for given ids
     cur.execute("""
         SELECT ct.connector_type_id, ct.name AS connector_name
         FROM ConnectorType ct

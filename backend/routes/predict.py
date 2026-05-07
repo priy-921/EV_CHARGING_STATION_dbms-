@@ -22,6 +22,7 @@ def predict_wait():
         from db import get_db
         conn = get_db()
         cur = conn.cursor()
+        #how many charging points exists at a specific station
         cur.execute("SELECT COUNT(*) AS cnt FROM ChargingPoint WHERE station_id = %s", (station_id,))
         result = cur.fetchone()
         total_points = result['cnt'] if result else 3

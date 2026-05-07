@@ -45,6 +45,7 @@ def get_stations():
 
     connector_clause = ''
     exists_clause = ''
+    #filter for connectors
     if connector_ids:
         placeholders = ', '.join(['%s'] * len(connector_ids))
         connector_clause = f" AND cp.connector_type_id IN ({placeholders})"
@@ -82,6 +83,7 @@ def get_stations():
         """
         cur.execute(query, (lat, lng, lat, *connector_ids, *connector_ids, *connector_ids, radius))
     else:
+        #without location gives all the stations
         query = f"""
             SELECT s.*,
                 (SELECT COUNT(*) FROM ChargingPoint cp
@@ -180,6 +182,7 @@ def get_station_detail(station_id):
 def get_peak_hours(station_id):
     conn = get_db()
     cur = conn.cursor()
+    #peak hours
     cur.execute("""
         SELECT HOUR(cs.start_time) AS hour, COUNT(*) AS session_count
         FROM ChargingSession cs
